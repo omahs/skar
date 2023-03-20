@@ -4,4 +4,12 @@ version = "0.0.1"
 edition = "2021"
 
 [dependencies]
+surf = { version = "2", default-features = false, features = ["h1-client-rustls"] }
+async-std = { workspace = true }
+thiserror = { workspace = true }
+futures = { workspace = true }
+serde = { workspace = true }
+log = { workspace = true }
+serde_json = { workspace = true }
+
 skar-format = { path = "../format" }

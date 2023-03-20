@@ -6,9 +6,9 @@ edition = "2021"
 [dependencies]
 arrayvec = { version = "0.7", features = ["serde"] }
 derive_more = "0.99"
-serde = { version = "1", features = ["derive"] }
 hex = "0.4.3"
-thiserror = "1"
+thiserror = { workspace = true }
+serde = { workspace = true }
 
 [dev-dependencies]
 serde_test = "1"

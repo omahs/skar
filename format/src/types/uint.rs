@@ -11,9 +11,13 @@ use std::result::Result as StdResult;
     Copy,
     PartialEq,
     Eq,
+    PartialOrd,
+    Ord,
     derive_more::From,
     derive_more::Into,
     derive_more::Deref,
+    derive_more::Add,
+    derive_more::Sub,
 )]
 pub struct UInt(u64);
 
