@@ -23,6 +23,7 @@ jobs:
     runs-on: ${{ matrix.os }}
     steps:
     - uses: actions/checkout@v3
+    - uses: Swatinem/rust-cache@v2
     - name: Build
       run: cargo build --verbose --workspace
     - name: Test
@@ -35,6 +36,7 @@ jobs:
     runs-on: ${{ matrix.os }}
     steps:
     - uses: actions/checkout@v3
+    - uses: Swatinem/rust-cache@v2
     - name: Build
       run: cargo build --release --verbose --workspace
     - name: Test
@@ -47,6 +49,7 @@ jobs:
     runs-on: ${{ matrix.os }}
     steps:
     - uses: actions/checkout@v3
+    - uses: Swatinem/rust-cache@v2
     - name: Rustfmt
       run: cargo fmt --check --verbose
     - name: Clippy
