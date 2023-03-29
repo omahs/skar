@@ -125,7 +125,7 @@ impl WatchHealth {
 
             match res_rx.recv().await.unwrap() {
                 Ok(resp) => {
-                    *self.last_block.write().await = Some(resp.try_into().unwrap());
+                    *self.last_block.write().await = Some(resp.try_into_single().unwrap());
                 }
                 Err(e) => {
                     *self.last_block.write().await = None;
@@ -200,7 +200,8 @@ impl Listen {
             RpcRequest::Single(req) => self.calculate_needed_reqs_impl(req),
             RpcRequest::Batch(reqs) => {
                 let needed_reqs_for_batch = |batch: &[RpcRequestImpl]| {
-                    batch.iter().fold(0, |acc, req| {
+                    // start folding from 1 and add any extra required requests
+                    batch.iter().fold(1, |acc, req| {
                         acc + self.calculate_needed_reqs_impl(req).get() - 1
                     })
                 };
@@ -224,7 +225,7 @@ impl Listen {
                 let range_limit = self.limit_config.get_logs_range_limit.get();
                 let range = *to_block - *from_block + 1.into();
                 let range: u64 = range.into();
-                let num_reqs = range + range_limit - 1 / range_limit;
+                let num_reqs = (range + range_limit - 1) / range_limit;
 
                 NonZeroUsize::new(num_reqs.try_into().unwrap()).unwrap()
             }
@@ -257,5 +258,143 @@ impl SendRpcRequest {
             .req
             .resp_from_json(&res)
             .ok_or_else(|| Error::InvalidRPCResponse(res))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::{GetLogs, RpcRequest, RpcRequestImpl};
+    use hex_literal::hex;
+
+    use super::*;
+
+    #[test]
+    fn test_calculate_required_last_block() {
+        let req = RpcRequest::Batch(vec![
+            RpcRequestImpl::GetBlockNumber,
+            RpcRequestImpl::GetLogs(GetLogs {
+                from_block: 15.into(),
+                to_block: 17.into(),
+            }),
+            RpcRequestImpl::GetBlockByNumber(199.into()),
+            RpcRequestImpl::GetBlockNumber,
+        ]);
+
+        let req = Endpoint::calculate_required_last_block(&req);
+
+        assert_eq!(req, Some(199.into()));
+    }
+
+    #[test]
+    fn test_calculate_required_last_block_get_logs() {
+        let req = Endpoint::calculate_required_last_block_impl(&RpcRequestImpl::GetLogs(GetLogs {
+            from_block: 15.into(),
+            to_block: 30.into(),
+        }));
+
+        assert_eq!(req, Some(30.into()));
+    }
+
+    #[test]
+    fn test_calculate_required_last_block_get_block_number() {
+        let req = Endpoint::calculate_required_last_block_impl(&RpcRequestImpl::GetBlockNumber);
+
+        assert!(req.is_none());
+    }
+
+    #[test]
+    fn test_calculate_required_last_block_get_block_by_number() {
+        let req = Endpoint::calculate_required_last_block_impl(&RpcRequestImpl::GetBlockByNumber(
+            69.into(),
+        ));
+
+        assert_eq!(req, Some(69.into()));
+    }
+
+    #[test]
+    fn test_calculate_required_last_block_get_transaction_receipt() {
+        let req =
+            Endpoint::calculate_required_last_block_impl(&RpcRequestImpl::GetTransactionReceipt(
+                691.into(),
+                hex!("017e8ad62f871604544a2ac9ea80ce920a0c79c30f11440a7b481ece7f18b2b0").into(),
+            ));
+
+        assert_eq!(req, Some(691.into()));
+    }
+
+    #[test]
+    fn test_update_limit() {
+        let (_job_tx, job_rx) = channel(1);
+        let mut listen = Listen {
+            url: surf::Url::parse("http://hello.com").unwrap().into(),
+            http_client: surf::Client::default().into(),
+            job_rx,
+            limit_config: LimitConfig {
+                req_limit: 50.try_into().unwrap(),
+                req_limit_window_ms: 1000.try_into().unwrap(),
+                get_logs_range_limit: 5.try_into().unwrap(),
+                batch_size_limit: 5.try_into().unwrap(),
+            },
+            window_num_reqs: 0,
+            last_limit_refresh: Instant::now(),
+        };
+
+        let res = listen.update_limit(&RpcRequest::Batch(
+            std::iter::repeat(RpcRequestImpl::GetBlockNumber)
+                .take(300)
+                .collect(),
+        ));
+
+        assert!(res.is_err());
+        assert_eq!(listen.window_num_reqs, 0);
+
+        let res = listen.update_limit(&RpcRequest::Batch(
+            std::iter::repeat(RpcRequestImpl::GetLogs(GetLogs {
+                from_block: 1.into(),
+                to_block: 7.into(),
+            }))
+            .take(2)
+            .collect(),
+        ));
+
+        assert!(res.is_ok());
+        assert_eq!(listen.window_num_reqs, 3);
+    }
+
+    #[test]
+    fn test_calculate_needed_reqs() {
+        let (_job_tx, job_rx) = channel(1);
+        let listen = Listen {
+            url: surf::Url::parse("http://hello.com").unwrap().into(),
+            http_client: surf::Client::default().into(),
+            job_rx,
+            limit_config: LimitConfig {
+                req_limit: 50.try_into().unwrap(),
+                req_limit_window_ms: 1000.try_into().unwrap(),
+                get_logs_range_limit: 5.try_into().unwrap(),
+                batch_size_limit: 5.try_into().unwrap(),
+            },
+            window_num_reqs: 0,
+            last_limit_refresh: Instant::now(),
+        };
+
+        let n = listen.calculate_needed_reqs(&RpcRequest::Single(RpcRequestImpl::GetBlockNumber));
+        assert_eq!(n.get(), 1);
+
+        let n = listen.calculate_needed_reqs(&RpcRequest::Batch(
+            std::iter::repeat(RpcRequestImpl::GetBlockNumber)
+                .take(301)
+                .collect(),
+        ));
+        assert_eq!(n.get(), 61);
+
+        let n = listen.calculate_needed_reqs(
+            &GetLogs {
+                from_block: 1.into(),
+                to_block: 16.into(),
+            }
+            .into(),
+        );
+        assert_eq!(n.get(), 4);
     }
 }

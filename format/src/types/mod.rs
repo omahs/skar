@@ -39,10 +39,10 @@ pub struct BlockHeader {
 
 #[derive(Debug, Default, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct Block {
+pub struct Block<Tx> {
     #[serde(flatten)]
     pub header: BlockHeader,
-    pub transactions: Box<[Transaction]>,
+    pub transactions: Box<[Tx]>,
 }
 
 #[derive(Debug, Default, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -95,7 +95,7 @@ pub struct Log {
     pub block_hash: Hash,
     pub block_number: BlockNumber,
     pub address: Address,
-    pub data: Box<[LogArgument]>,
+    pub data: Data,
     pub topics: ArrayVec<LogArgument, 4>,
 }
 

@@ -1,6 +1,7 @@
-use skar_format::{BlockHeader, BlockNumber, Hash, Log, TransactionReceipt};
+use skar_format::{Block, BlockNumber, Hash, Log, TransactionReceipt};
 use std::result::Result as StdResult;
 
+#[derive(Clone)]
 pub enum RpcRequestImpl {
     GetBlockNumber,
     GetBlockByNumber(BlockNumber),
@@ -10,8 +11,8 @@ pub enum RpcRequestImpl {
 
 pub enum RpcResponseImpl {
     GetBlockNumber(BlockNumber),
+    GetBlockByNumber(Block<Hash>),
     GetLogs(Vec<Log>),
-    GetBlockByNumber(BlockHeader),
     GetTransactionReceipt(TransactionReceipt),
 }
 
@@ -25,6 +26,7 @@ pub type RpcResponse = MaybeBatch<RpcResponseImpl>;
 
 pub struct GetBlockNumber;
 
+#[derive(Clone)]
 pub struct GetLogs {
     pub from_block: BlockNumber,
     pub to_block: BlockNumber,
@@ -36,12 +38,12 @@ impl From<GetBlockNumber> for RpcRequest {
     }
 }
 
-impl TryInto<BlockNumber> for RpcResponse {
+impl TryInto<BlockNumber> for RpcResponseImpl {
     type Error = ();
 
     fn try_into(self) -> StdResult<BlockNumber, Self::Error> {
         match self {
-            RpcResponse::Single(RpcResponseImpl::GetBlockNumber(block_num)) => Ok(block_num),
+            RpcResponseImpl::GetBlockNumber(block_num) => Ok(block_num),
             _ => Err(()),
         }
     }
@@ -53,13 +55,61 @@ impl From<GetLogs> for RpcRequest {
     }
 }
 
-impl TryInto<Vec<Log>> for RpcResponse {
+impl TryInto<Vec<Log>> for RpcResponseImpl {
     type Error = ();
 
     fn try_into(self) -> StdResult<Vec<Log>, Self::Error> {
         match self {
-            RpcResponse::Single(RpcResponseImpl::GetLogs(logs)) => Ok(logs),
+            RpcResponseImpl::GetLogs(logs) => Ok(logs),
             _ => Err(()),
+        }
+    }
+}
+
+impl TryInto<Block<Hash>> for RpcResponseImpl {
+    type Error = ();
+
+    fn try_into(self) -> StdResult<Block<Hash>, Self::Error> {
+        match self {
+            RpcResponseImpl::GetBlockByNumber(blocks) => Ok(blocks),
+            _ => Err(()),
+        }
+    }
+}
+
+impl<T> TryInto<Vec<T>> for RpcResponse
+where
+    RpcResponseImpl: TryInto<T, Error = ()>,
+{
+    type Error = ();
+
+    fn try_into(self) -> StdResult<Vec<T>, Self::Error> {
+        match self {
+            Self::Batch(resps) => resps.into_iter().map(TryInto::try_into).collect(),
+            _ => Err(()),
+        }
+    }
+}
+
+impl TryInto<TransactionReceipt> for RpcResponseImpl {
+    type Error = ();
+
+    fn try_into(self) -> StdResult<TransactionReceipt, Self::Error> {
+        match self {
+            RpcResponseImpl::GetTransactionReceipt(receipt) => Ok(receipt),
+            _ => Err(()),
+        }
+    }
+}
+
+impl RpcResponse {
+    pub fn try_into_single<T>(self) -> Option<T>
+    where
+        RpcResponseImpl: TryInto<T, Error = ()>,
+    {
+        match self {
+            Self::Single(v) => v.try_into().ok(),
+            _ => None,
         }
     }
 }
@@ -178,3 +228,71 @@ impl RpcRequestImpl {
 }
 
 type JsonObject = serde_json::Map<String, serde_json::Value>;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use hex_literal::hex;
+
+    fn read_json_file(name: &str) -> String {
+        std::fs::read_to_string(format!("{}/test-data/{name}", env!("CARGO_MANIFEST_DIR"))).unwrap()
+    }
+
+    #[test]
+    fn test_get_block_number() {
+        let req = RpcRequest::Single(RpcRequestImpl::GetBlockNumber);
+
+        let _: BlockNumber = req
+            .resp_from_json(&read_json_file("eth_blockNumber.json"))
+            .unwrap()
+            .try_into_single()
+            .unwrap();
+    }
+
+    #[test]
+    fn test_get_block_by_number() {
+        let req = RpcRequest::Batch(vec![
+            RpcRequestImpl::GetBlockByNumber(13.into()),
+            RpcRequestImpl::GetBlockByNumber(14.into()),
+            RpcRequestImpl::GetBlockByNumber(15.into()),
+        ]);
+        let _: Vec<Block<Hash>> = req
+            .resp_from_json(&read_json_file("eth_getBlockByNumber_batch.json"))
+            .unwrap()
+            .try_into()
+            .unwrap();
+    }
+
+    #[test]
+    fn test_get_logs() {
+        let req = RpcRequest::Single(RpcRequestImpl::GetLogs(GetLogs {
+            from_block: 0.into(),
+            to_block: 13.into(),
+        }));
+
+        let _: Vec<Log> = req
+            .resp_from_json(&read_json_file("eth_getLogs.json"))
+            .unwrap()
+            .try_into_single()
+            .unwrap();
+    }
+
+    #[test]
+    fn test_get_transaction_receipt() {
+        let req = RpcRequest::Batch(vec![
+            RpcRequestImpl::GetTransactionReceipt(
+                16929247.into(),
+                hex!("017e8ad62f871604544a2ac9ea80ce920a0c79c30f11440a7b481ece7f18b2b0").into(),
+            ),
+            RpcRequestImpl::GetTransactionReceipt(
+                16929247.into(),
+                hex!("eab31339e74d34155f8b0a92f384672c7b861c07939f7d58d921d5b50fde640e").into(),
+            ),
+        ]);
+        let _: Vec<TransactionReceipt> = req
+            .resp_from_json(&read_json_file("eth_getTransactionReceipt_batch.json"))
+            .unwrap()
+            .try_into()
+            .unwrap();
+    }
+}
