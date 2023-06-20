@@ -15,4 +15,4 @@ serde_json = { workspace = true }
 skar-format = { path = "../format" }
 
 [dev-dependencies]
-hex-literal = "0.3.4"
+hex-literal = "0.4.1"
