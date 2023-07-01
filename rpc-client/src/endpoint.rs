@@ -180,7 +180,7 @@ impl Listen {
         let needed_reqs = self.calculate_needed_reqs(req);
 
         if self.last_limit_refresh.elapsed().as_millis()
-            >= self.limit_config.req_limit_window_ms.get()
+            >= self.limit_config.req_limit_window_ms.get().into()
         {
             self.last_limit_refresh = Instant::now();
             self.window_num_reqs = 0;
@@ -240,7 +240,13 @@ struct SendRpcRequest {
 }
 
 impl SendRpcRequest {
-    async fn send(self) -> Result<RpcResponse> {
+    async fn send(self) {
+        if let Err(e) = self.send_impl().await {
+            log::error!("failed to send rpc req:\n{}", e);
+        }
+    }
+
+    async fn send_impl(self) -> Result<()> {
         let json: serde_json::Value = self.job.req.as_ref().into();
 
         let res = self
@@ -254,10 +260,14 @@ impl SendRpcRequest {
             .await
             .map_err(Error::HttpRequest)?;
 
-        self.job
+        let resp = self.job
             .req
             .resp_from_json(&res)
-            .ok_or_else(|| Error::InvalidRPCResponse(res))
+            .ok_or_else(|| Error::InvalidRPCResponse(res));
+
+        self.job.res_tx.send(resp).await.ok();
+
+        Ok(())
     }
 }
 

@@ -4,5 +4,14 @@ version = "0.0.1"
 edition = "2021"
 
 [dependencies]
+serde = { version = "1", features = ["derive"] }
+toml = "0.7"
+clap = { version = "4", features = ["derive"] }
+env_logger = "0.10"
+log = "0.4"
+mimalloc = { version = "0.1", default-features = false }
+anyhow = "1"
+tokio = { version = "1", features = ["full"] }
+
 skar-format = { path = "../format" }
 skar-rpc-client = { path = "../rpc-client" }

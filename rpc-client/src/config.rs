@@ -1,5 +1,5 @@
 use serde::{Deserialize, Serialize};
-use std::num::{NonZeroU128, NonZeroU64, NonZeroUsize};
+use std::num::{NonZeroU64, NonZeroUsize};
 use url::Url;
 
 #[derive(Serialize, Deserialize)]
@@ -19,7 +19,7 @@ pub struct EndpointConfig {
 #[derive(Serialize, Deserialize)]
 pub struct LimitConfig {
     pub req_limit: NonZeroUsize,
-    pub req_limit_window_ms: NonZeroU128,
+    pub req_limit_window_ms: NonZeroU64,
     pub get_logs_range_limit: NonZeroU64,
     pub batch_size_limit: NonZeroUsize,
 }
