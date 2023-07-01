@@ -2,32 +2,31 @@ use crate::{
     EndpointConfig, Error, GetBlockNumber, GetLogs, LimitConfig, Result, RpcRequest,
     RpcRequestImpl, RpcResponse,
 };
-use async_std::{
-    channel::{bounded as channel, Receiver, Sender},
-    sync::{Arc, RwLock},
-    task,
-};
+use reqwest::Method;
 use skar_format::BlockNumber;
 use std::{
     cmp,
     num::{NonZeroU64, NonZeroUsize},
+    sync::Arc,
     time::{Duration, Instant},
 };
-use surf::http::Method;
+use tokio::sync::mpsc;
+use tokio::sync::RwLock;
+use url::Url;
 
 #[derive(Debug)]
 pub struct Endpoint {
-    url: Arc<surf::Url>,
+    url: Arc<Url>,
     last_block: Arc<RwLock<Option<BlockNumber>>>,
-    job_tx: Sender<Job>,
+    job_tx: mpsc::Sender<Job>,
 }
 
 impl Endpoint {
-    pub fn new(http_client: Arc<surf::Client>, config: EndpointConfig) -> Self {
+    pub fn new(http_client: reqwest::Client, config: EndpointConfig) -> Self {
         let last_block = Arc::new(RwLock::new(None));
         let url = Arc::new(config.url);
 
-        task::spawn(
+        tokio::spawn(
             WatchHealth {
                 http_client: http_client.clone(),
                 last_block: last_block.clone(),
@@ -37,9 +36,9 @@ impl Endpoint {
             .watch(),
         );
 
-        let (job_tx, job_rx) = channel(1);
+        let (job_tx, job_rx) = mpsc::channel(1);
 
-        task::spawn(
+        tokio::spawn(
             Listen {
                 http_client,
                 job_rx,
@@ -58,7 +57,7 @@ impl Endpoint {
         }
     }
 
-    pub fn url(&self) -> &surf::Url {
+    pub fn url(&self) -> &Url {
         &self.url
     }
 
@@ -70,7 +69,7 @@ impl Endpoint {
             }
         }
 
-        let (res_tx, res_rx) = channel(1);
+        let (res_tx, mut res_rx) = mpsc::channel(1);
 
         self.job_tx.send(Job { res_tx, req }).await.ok().unwrap();
 
@@ -101,8 +100,8 @@ impl Endpoint {
 }
 
 struct WatchHealth {
-    url: Arc<surf::Url>,
-    http_client: Arc<surf::Client>,
+    url: Arc<Url>,
+    http_client: reqwest::Client,
     last_block: Arc<RwLock<Option<BlockNumber>>>,
     status_refresh_interval_secs: NonZeroU64,
 }
@@ -110,11 +109,11 @@ struct WatchHealth {
 impl WatchHealth {
     async fn watch(self) {
         loop {
-            let (res_tx, res_rx) = channel(1);
+            let (res_tx, mut res_rx) = mpsc::channel(1);
 
             let req = Arc::new(GetBlockNumber.into());
 
-            task::spawn(
+            tokio::spawn(
                 SendRpcRequest {
                     url: self.url.clone(),
                     http_client: self.http_client.clone(),
@@ -137,20 +136,20 @@ impl WatchHealth {
                 }
             }
 
-            task::sleep(Duration::from_secs(self.status_refresh_interval_secs.get())).await;
+            tokio::time::sleep(Duration::from_secs(self.status_refresh_interval_secs.get())).await;
         }
     }
 }
 
 struct Job {
     req: Arc<RpcRequest>,
-    res_tx: Sender<Result<RpcResponse>>,
+    res_tx: mpsc::Sender<Result<RpcResponse>>,
 }
 
 struct Listen {
-    url: Arc<surf::Url>,
-    http_client: Arc<surf::Client>,
-    job_rx: Receiver<Job>,
+    url: Arc<Url>,
+    http_client: reqwest::Client,
+    job_rx: mpsc::Receiver<Job>,
     limit_config: LimitConfig,
     window_num_reqs: usize,
     last_limit_refresh: Instant,
@@ -158,15 +157,15 @@ struct Listen {
 
 impl Listen {
     async fn listen(mut self) {
-        while let Ok(job) = self.job_rx.recv().await {
+        while let Some(job) = self.job_rx.recv().await {
             if let Err(e) = self.update_limit(&job.req) {
-                task::spawn(async move {
+                tokio::spawn(async move {
                     job.res_tx.send(Err(e)).await.ok();
                 });
                 continue;
             }
 
-            task::spawn(
+            tokio::spawn(
                 SendRpcRequest {
                     http_client: self.http_client.clone(),
                     job,
@@ -235,8 +234,8 @@ impl Listen {
 }
 
 struct SendRpcRequest {
-    url: Arc<surf::Url>,
-    http_client: Arc<surf::Client>,
+    url: Arc<Url>,
+    http_client: reqwest::Client,
     job: Job,
 }
 
@@ -244,13 +243,14 @@ impl SendRpcRequest {
     async fn send(self) -> Result<RpcResponse> {
         let json: serde_json::Value = self.job.req.as_ref().into();
 
-        let req = surf::Request::builder(Method::Post, surf::Url::clone(&self.url))
-            .body_json(&json)
-            .unwrap();
-
         let res = self
             .http_client
-            .recv_string(req)
+            .request(Method::POST, Url::clone(&self.url))
+            .json(&json)
+            .send()
+            .await
+            .map_err(Error::HttpRequest)?
+            .text()
             .await
             .map_err(Error::HttpRequest)?;
 
@@ -324,10 +324,10 @@ mod tests {
 
     #[test]
     fn test_update_limit() {
-        let (_job_tx, job_rx) = channel(1);
+        let (_job_tx, job_rx) = mpsc::channel(1);
         let mut listen = Listen {
-            url: surf::Url::parse("http://hello.com").unwrap().into(),
-            http_client: surf::Client::default().into(),
+            url: Url::parse("http://hello.com").unwrap().into(),
+            http_client: reqwest::Client::new(),
             job_rx,
             limit_config: LimitConfig {
                 req_limit: 50.try_into().unwrap(),
@@ -363,10 +363,10 @@ mod tests {
 
     #[test]
     fn test_calculate_needed_reqs() {
-        let (_job_tx, job_rx) = channel(1);
+        let (_job_tx, job_rx) = mpsc::channel(1);
         let listen = Listen {
-            url: surf::Url::parse("http://hello.com").unwrap().into(),
-            http_client: surf::Client::default().into(),
+            url: Url::parse("http://hello.com").unwrap().into(),
+            http_client: reqwest::Client::new(),
             job_rx,
             limit_config: LimitConfig {
                 req_limit: 50.try_into().unwrap(),

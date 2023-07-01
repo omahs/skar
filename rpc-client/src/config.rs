@@ -1,5 +1,6 @@
 use serde::{Deserialize, Serialize};
 use std::num::{NonZeroU128, NonZeroU64, NonZeroUsize};
+use url::Url;
 
 #[derive(Serialize, Deserialize)]
 pub struct RpcClientConfig {
@@ -9,7 +10,7 @@ pub struct RpcClientConfig {
 
 #[derive(Serialize, Deserialize)]
 pub struct EndpointConfig {
-    pub url: surf::Url,
+    pub url: Url,
     pub status_refresh_interval_secs: NonZeroU64,
     #[serde(flatten)]
     pub limit: LimitConfig,
