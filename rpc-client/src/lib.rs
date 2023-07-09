@@ -8,5 +8,6 @@ pub use config::{EndpointConfig, LimitConfig, RpcClientConfig};
 pub use error::{Error, Result};
 pub use rpc_client::RpcClient;
 pub use types::{
-    GetBlockNumber, GetLogs, MaybeBatch, RpcRequest, RpcRequestImpl, RpcResponse, RpcResponseImpl,
+    GetBlockByNumber, GetBlockNumber, GetLogs, GetTransactionReceipt, MaybeBatch, RpcRequest,
+    RpcRequestImpl, RpcResponse, RpcResponseImpl,
 };

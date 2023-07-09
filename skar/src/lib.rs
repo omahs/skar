@@ -1,6 +1,6 @@
-mod config;
 mod args;
-mod skar;
+mod config;
+mod skar_runner;
 
-pub use args::Args as Args;
-pub use skar::Skar;
+pub use args::Args;
+pub use skar_runner::SkarRunner;

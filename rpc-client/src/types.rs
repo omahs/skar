@@ -1,4 +1,4 @@
-use skar_format::{Block, BlockNumber, Hash, Log, TransactionReceipt};
+use skar_format::{Block, BlockNumber, Hash, Log, Transaction, TransactionReceipt};
 use std::result::Result as StdResult;
 
 #[derive(Clone)]
@@ -11,11 +11,12 @@ pub enum RpcRequestImpl {
 
 pub enum RpcResponseImpl {
     GetBlockNumber(BlockNumber),
-    GetBlockByNumber(Block<Hash>),
+    GetBlockByNumber(Block<Transaction>),
     GetLogs(Vec<Log>),
     GetTransactionReceipt(TransactionReceipt),
 }
 
+#[derive(Clone)]
 pub enum MaybeBatch<T> {
     Single(T),
     Batch(Vec<T>),
@@ -66,10 +67,41 @@ impl TryInto<Vec<Log>> for RpcResponseImpl {
     }
 }
 
-impl TryInto<Block<Hash>> for RpcResponseImpl {
+pub struct GetBlockByNumber(pub BlockNumber);
+
+impl From<GetBlockByNumber> for RpcRequest {
+    fn from(req: GetBlockByNumber) -> Self {
+        Self::Single(RpcRequestImpl::GetBlockByNumber(req.0))
+    }
+}
+
+impl From<Vec<GetBlockByNumber>> for RpcRequest {
+    fn from(reqs: Vec<GetBlockByNumber>) -> RpcRequest {
+        Self::Batch(
+            reqs.into_iter()
+                .map(|v| RpcRequestImpl::GetBlockByNumber(v.0))
+                .collect(),
+        )
+    }
+}
+
+#[derive(Clone)]
+pub struct GetTransactionReceipt(pub BlockNumber, pub Hash);
+
+impl From<Vec<GetTransactionReceipt>> for RpcRequest {
+    fn from(reqs: Vec<GetTransactionReceipt>) -> Self {
+        Self::Batch(
+            reqs.into_iter()
+                .map(|v| RpcRequestImpl::GetTransactionReceipt(v.0, v.1))
+                .collect(),
+        )
+    }
+}
+
+impl TryInto<Block<Transaction>> for RpcResponseImpl {
     type Error = ();
 
-    fn try_into(self) -> StdResult<Block<Hash>, Self::Error> {
+    fn try_into(self) -> StdResult<Block<Transaction>, Self::Error> {
         match self {
             RpcResponseImpl::GetBlockByNumber(blocks) => Ok(blocks),
             _ => Err(()),
@@ -144,7 +176,7 @@ impl RpcRequestImpl {
                 "method": "eth_getBlockByNumber",
                 "params": [
                     block_number,
-                    false,
+                    true,
                 ],
                 "id": idx,
                 "jsonrpc": "2.0",

@@ -5,7 +5,7 @@ use thiserror::Error as ThisError;
 pub enum Error {
     #[error("Failed to execute http request:\n{0}")]
     HttpRequest(reqwest::Error),
-    #[error("None of the endpoints can handle this rpc request.")]
+    #[error("None of the endpoints can handle this rpc request. {0:#?}")]
     NoHealthyEndpoints(Vec<Self>),
     #[error("Endpoint limit is too low to handle this request.")]
     EndpointLimitTooLow,

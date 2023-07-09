@@ -1,0 +1,16 @@
+[ingest]
+from_block = 8000000
+to_block = 8100000
+concurrency_limit = 8
+batch_size = 50
+
+[ingest.rpc_client]
+http_req_timeout_millis = 5000
+
+[[ingest.rpc_client.endpoints]]
+url = "https://rpc.ankr.com/eth"
+status_refresh_interval_secs = 10
+req_limit = 10
+req_limit_window_ms = 1000
+get_logs_range_limit = 20
+batch_size_limit = 50

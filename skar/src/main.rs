@@ -1,5 +1,5 @@
-use skar::{Args, Skar};
 use anyhow::{Context, Result};
+use skar::{Args, SkarRunner};
 
 use mimalloc::MiMalloc;
 
@@ -12,7 +12,7 @@ async fn main() -> Result<()> {
 
     let args = Args::parse();
 
-    Skar::run(args).await.context("run skar")?;
+    SkarRunner::run(args).await.context("run skar")?;
 
     Ok(())
 }

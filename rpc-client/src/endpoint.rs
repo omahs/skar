@@ -241,12 +241,12 @@ struct SendRpcRequest {
 
 impl SendRpcRequest {
     async fn send(self) {
-        if let Err(e) = self.send_impl().await {
-            log::error!("failed to send rpc req:\n{}", e);
-        }
+        let res_tx = self.job.res_tx.clone();
+        let res = self.send_impl().await;
+        res_tx.send(res).await.ok();
     }
 
-    async fn send_impl(self) -> Result<()> {
+    async fn send_impl(self) -> Result<RpcResponse> {
         let json: serde_json::Value = self.job.req.as_ref().into();
 
         let res = self
@@ -260,14 +260,10 @@ impl SendRpcRequest {
             .await
             .map_err(Error::HttpRequest)?;
 
-        let resp = self.job
+        self.job
             .req
             .resp_from_json(&res)
-            .ok_or_else(|| Error::InvalidRPCResponse(res));
-
-        self.job.res_tx.send(resp).await.ok();
-
-        Ok(())
+            .ok_or_else(|| Error::InvalidRPCResponse(res))
     }
 }
 

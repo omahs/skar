@@ -1,6 +1,8 @@
 use crate::{endpoint::Endpoint, Error, Result, RpcClientConfig, RpcRequest, RpcResponse};
+use std::cmp;
 use std::sync::Arc;
 use std::time::Duration;
+use tokio::time::sleep;
 
 pub struct RpcClient {
     endpoints: Vec<Endpoint>,
@@ -28,16 +30,43 @@ impl RpcClient {
         &self.endpoints
     }
 
-    pub async fn send(&self, req: RpcRequest) -> Result<RpcResponse> {
+    pub async fn send_once(&self, req: RpcRequest) -> Result<RpcResponse> {
         let req = Arc::new(req);
         let mut errs = Vec::new();
         for endpoint in self.endpoints.iter() {
             match endpoint.send(req.clone()).await {
                 Ok(resp) => return Ok(resp),
-                Err(e) => errs.push(e),
+                Err(e) => {
+                    log::debug!(
+                        "failed make request to endpoint {}.\nCaused by: {}",
+                        endpoint.url(),
+                        e
+                    );
+                    errs.push(e);
+                }
             }
         }
 
         Err(Error::NoHealthyEndpoints(errs))
+    }
+
+    pub async fn send(&self, req: RpcRequest) -> Result<RpcResponse> {
+        let mut base = 1;
+
+        loop {
+            match self.send_once(req.clone()).await {
+                Ok(res) => return Ok(res),
+                Err(e) => {
+                    log::debug!("failed to execute request: {}", e);
+                }
+            }
+
+            let secs = Duration::from_secs(base);
+            let millis = Duration::from_millis(fastrange_rs::fastrange_64(rand::random(), 1000));
+
+            sleep(secs + millis).await;
+
+            base = cmp::min(base + 1, 5);
+        }
     }
 }
