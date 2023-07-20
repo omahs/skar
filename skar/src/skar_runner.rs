@@ -73,7 +73,7 @@ impl Write {
                         .chain(std::iter::once(blocks))
                         .collect(),
                     transactions: state
-                        .blocks
+                        .transactions
                         .iter()
                         .cloned()
                         .chain(std::iter::once(transactions))
