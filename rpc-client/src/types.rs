@@ -288,7 +288,7 @@ mod tests {
             RpcRequestImpl::GetBlockByNumber(14.into()),
             RpcRequestImpl::GetBlockByNumber(15.into()),
         ]);
-        let _: Vec<Block<Hash>> = req
+        let _: Vec<Block<Transaction>> = req
             .resp_from_json(&read_json_file("eth_getBlockByNumber_batch.json"))
             .unwrap()
             .try_into()

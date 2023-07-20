@@ -11,6 +11,23 @@ pub enum TransactionStatus {
     Failure,
 }
 
+impl TransactionStatus {
+    pub fn from_u8(val: u8) -> Result<Self> {
+        match val {
+            1 => Ok(Self::Success),
+            0 => Ok(Self::Failure),
+            _ => Err(Error::UnknownTransactionStatus(val.to_string())),
+        }
+    }
+
+    pub fn to_u8(&self) -> u8 {
+        match self {
+            Self::Success => 1,
+            Self::Failure => 0,
+        }
+    }
+}
+
 impl FromStr for TransactionStatus {
     type Err = Error;
 

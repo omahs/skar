@@ -12,6 +12,25 @@ pub enum TransactionType {
     DynamicFee,
 }
 
+impl TransactionType {
+    pub fn from_u8(val: u8) -> Result<Self> {
+        match val {
+            2 => Ok(Self::DynamicFee),
+            1 => Ok(Self::AccessListType),
+            0 => Ok(Self::Legacy),
+            _ => Err(Error::UnknownTransactionType(val.to_string())),
+        }
+    }
+
+    pub fn to_u8(&self) -> u8 {
+        match self {
+            Self::DynamicFee => 2,
+            Self::AccessListType => 1,
+            Self::Legacy => 0,
+        }
+    }
+}
+
 impl FromStr for TransactionType {
     type Err = Error;
 
