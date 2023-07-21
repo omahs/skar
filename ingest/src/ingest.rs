@@ -98,6 +98,8 @@ impl Ingester {
                 .send(BatchData {
                     blocks,
                     receipts: res_receipts,
+                    from_block: start_block,
+                    to_block: end_block,
                 })
                 .await
                 .is_err()

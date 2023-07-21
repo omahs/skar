@@ -15,6 +15,7 @@ tokio = { version = "1", features = ["full"] }
 arrow = "42.0.0"
 arc-swap = "1"
 datafusion = "27.0.0"
+parquet = "42.0.0"
 
 skar-format = { path = "../format" }
 skar-ingest = { path = "../ingest" }

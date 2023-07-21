@@ -2299,6 +2299,7 @@ dependencies = [
  "env_logger",
  "log",
  "mimalloc",
+ "parquet",
  "serde",
  "skar-format",
  "skar-ingest",
