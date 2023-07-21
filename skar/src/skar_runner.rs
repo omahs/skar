@@ -1,22 +1,33 @@
-use std::{cmp, sync::Arc};
+use std::{cmp, collections::BTreeSet, sync::Arc};
 
 use crate::{
     config::{Config, ParquetConfig},
+    db::Db,
     query::{self, write_folder},
     schema::data_to_batches,
     Args,
 };
 use anyhow::{Context, Result};
 use arc_swap::{access::DynAccess, ArcSwap};
-use arrow::record_batch::RecordBatch;
+use arrow::{array::FixedSizeBinaryArray, record_batch::RecordBatch};
+use sbbf_rs_safe::Filter as Sbbf;
 use skar_ingest::Ingest;
 use tokio::fs;
 
 pub struct SkarRunner;
 
-#[derive(Default, Clone)]
 pub(crate) struct State {
     pub(crate) in_mem: InMemory,
+    pub(crate) db: Arc<Db>,
+}
+
+impl State {
+    fn new(db: Arc<Db>) -> Self {
+        Self {
+            in_mem: Default::default(),
+            db,
+        }
+    }
 }
 
 #[derive(Clone)]
@@ -55,7 +66,15 @@ impl SkarRunner {
 
         let ingest = Ingest::spawn(cfg.ingest);
 
-        let state = Arc::new(ArcSwap::new(State::default().into()));
+        fs::create_dir_all(&cfg.db.path)
+            .await
+            .context("create db directory if not exists")?;
+
+        let db = Db::new(&cfg.db.path).context("open db")?;
+        let db = Arc::new(db);
+
+        let state = ArcSwap::new(State::new(db).into());
+        let state = Arc::new(state);
 
         tokio::spawn({
             let write = Write {
@@ -82,6 +101,46 @@ impl SkarRunner {
     }
 }
 
+fn build_filter(in_mem: &InMemory) -> Sbbf {
+    let mut addrs = BTreeSet::new();
+
+    for batch in in_mem.transactions.data.iter() {
+        for col_name in ["from", "to"] {
+            let col = batch
+                .column_by_name(col_name)
+                .unwrap()
+                .as_any()
+                .downcast_ref::<FixedSizeBinaryArray>()
+                .unwrap();
+
+            for addr in col.iter().flatten() {
+                addrs.insert(addr);
+            }
+        }
+    }
+
+    for batch in in_mem.logs.data.iter() {
+        let col = batch
+            .column_by_name("address")
+            .unwrap()
+            .as_any()
+            .downcast_ref::<FixedSizeBinaryArray>()
+            .unwrap();
+
+        for addr in col.iter().flatten() {
+            addrs.insert(addr);
+        }
+    }
+
+    let mut filter = Sbbf::new(8, cmp::min(addrs.len() * 2, 16 * 1024));
+
+    for addr in addrs {
+        filter.insert_hash(wyhash::wyhash(addr, 0));
+    }
+
+    filter
+}
+
 struct Write {
     state: Arc<ArcSwap<State>>,
     ingest: Ingest,
@@ -100,11 +159,13 @@ impl Write {
                     >= self.parquet_config.transactions.max_file_size
                 || state.in_mem.logs.num_rows >= self.parquet_config.logs.max_file_size
             {
+                let to_block = state.in_mem.to_block;
+                let from_block = state.in_mem.from_block;
                 let mut path = self.parquet_config.path.clone();
-                path.push(format!(
-                    "{}-{}",
-                    state.in_mem.from_block, state.in_mem.to_block
-                ));
+                path.push(format!("{}-{}", from_block, to_block,));
+
+                fs::remove_dir_all(&path).await.ok();
+
                 fs::create_dir_all(&path)
                     .await
                     .context("create parquet directory")?;
@@ -113,7 +174,16 @@ impl Write {
                     .await
                     .context("write parquet folder")?;
 
-                state = Arc::new(State::default());
+                state
+                    .db
+                    .insert_folder_record(
+                        from_block,
+                        to_block,
+                        build_filter(&state.in_mem).as_bytes(),
+                    )
+                    .context("insert folder record")?;
+
+                state = Arc::new(State::new(state.db.clone()));
             }
 
             let from_block = cmp::min(data.from_block, state.in_mem.from_block);
@@ -166,6 +236,7 @@ impl Write {
                         from_block,
                         to_block,
                     },
+                    db: state.db.clone(),
                 }
                 .into(),
             );

@@ -1,5 +1,6 @@
 mod args;
 mod config;
+mod db;
 mod query;
 mod schema;
 mod skar_runner;

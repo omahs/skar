@@ -7,6 +7,7 @@ use skar_ingest::IngestConfig;
 pub struct Config {
     pub ingest: IngestConfig,
     pub parquet: ParquetConfig,
+    pub db: DbConfig,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -34,4 +35,9 @@ pub struct TableConfig {
     /// This is implemented as best effort, so
     /// actual pages might be bigger.
     pub data_page_size_limit: usize,
+}
+
+#[derive(Serialize, Deserialize)]
+pub struct DbConfig {
+    pub path: PathBuf,
 }

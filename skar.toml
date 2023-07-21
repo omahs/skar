@@ -1,14 +1,17 @@
+[db]
+path = "data/db"
+
 [ingest]
-from_block = 8000000
+from_block = 0
 to_block = 8100000
 concurrency_limit = 16
 batch_size = 10
 
 [parquet]
-path = "data"
+path = "data/parquet"
 
 [parquet.blocks]
-max_file_size = 100000
+max_file_size = 10
 max_row_group_size = 10000
 data_page_size_limit = 1024000
 
