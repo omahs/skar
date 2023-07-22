@@ -1,9 +1,9 @@
 use crate::config::InnerConfig;
 use crate::{BatchData, IngestConfig};
-use anyhow::{Context, Result};
+use anyhow::{Context, Error, Result};
 use futures::{stream, StreamExt};
 use skar_format::{Block, Transaction, TransactionReceipt};
-use skar_rpc_client::{GetBlockByNumber, GetTransactionReceipt, RpcClient, RpcRequest};
+use skar_rpc_client::{GetBlockByNumber, GetBlockReceipts, RpcClient, RpcRequest};
 use std::cmp;
 use std::sync::Arc;
 use tokio::sync::mpsc;
@@ -51,59 +51,46 @@ impl Ingester {
         let step: u64 = self.config.batch_size.get().try_into().unwrap();
         let config = self.config;
 
-        for start_block in (config.from_block..config.to_block).step_by(config.batch_size.get()) {
-            let end_block = cmp::min(config.to_block, start_block + step);
+        let futs = (config.from_block..config.to_block)
+            .step_by(config.batch_size.get())
+            .map(|start_block| {
+                let client = self.client.clone();
 
-            let req: RpcRequest = (start_block..end_block)
-                .map(|block_num| GetBlockByNumber(block_num.into()))
-                .collect::<Vec<_>>()
-                .into();
+                async move {
+                    let end_block = cmp::min(config.to_block, start_block + step);
 
-            let resp = self.client.send(req).await.context("get block headers")?;
+                    let req: RpcRequest = (start_block..end_block)
+                        .map(|block_num| GetBlockByNumber(block_num.into()))
+                        .collect::<Vec<_>>()
+                        .into();
 
-            let blocks: Vec<Block<Transaction>> = resp.try_into().unwrap();
+                    let resp = client.send(req).await.context("get block headers")?;
 
-            let mut reqs = Vec::new();
+                    let blocks: Vec<Block<Transaction>> = resp.try_into().unwrap();
 
-            for block in blocks.iter() {
-                for tx in block.transactions.iter() {
-                    reqs.push(GetTransactionReceipt(block.header.number, tx.hash.clone()));
+                    let req: RpcRequest = (start_block..end_block)
+                        .map(|block_num| GetBlockReceipts(block_num.into()))
+                        .collect::<Vec<_>>()
+                        .into();
+
+                    let resp = client.send(req).await.context("get block receipts")?;
+
+                    let receipts: Vec<Vec<TransactionReceipt>> = resp.try_into().unwrap();
+
+                    Ok::<_, Error>(BatchData {
+                        blocks,
+                        receipts,
+                        from_block: start_block,
+                        to_block: end_block,
+                    })
                 }
-            }
+            });
 
-            let futs = reqs
-                .chunks(config.batch_size.get())
-                .map(|chunk| {
-                    let req: RpcRequest = chunk.to_vec().into();
-                    let client = self.client.clone();
-                    async move { client.clone().send(req).await }
-                })
-                .collect::<Vec<_>>();
+        let mut data_stream = stream::iter(futs).buffered(config.concurrency_limit.get());
+        while let Some(data) = data_stream.next().await {
+            let data = data?;
 
-            let mut receipts_stream =
-                stream::iter(futs).buffer_unordered(config.concurrency_limit.get());
-
-            let mut res_receipts = Vec::new();
-
-            while let Some(receipts) = receipts_stream.next().await {
-                let receipts: Vec<TransactionReceipt> = receipts
-                    .context("execute receipts request")?
-                    .try_into()
-                    .unwrap();
-                res_receipts.extend_from_slice(&receipts);
-            }
-
-            if self
-                .data_tx
-                .send(BatchData {
-                    blocks,
-                    receipts: res_receipts,
-                    from_block: start_block,
-                    to_block: end_block,
-                })
-                .await
-                .is_err()
-            {
+            if self.data_tx.send(data).await.is_err() {
                 log::warn!("no one is listening so quitting ingest loop.");
                 break;
             }

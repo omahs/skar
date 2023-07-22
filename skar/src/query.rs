@@ -189,5 +189,16 @@ pub(crate) async fn query(state: &State) -> Result<()> {
     .await
     .context("show log dataframe")?;
 
+    ctx.sql(
+        "
+        SELECT MAX(number) as max_block_num from blocks; 
+    ",
+    )
+    .await
+    .context("execute sql query")?
+    .show()
+    .await
+    .context("show max_block_num dataframe")?;
+
     Ok(())
 }

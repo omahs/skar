@@ -166,7 +166,7 @@ pub fn data_to_batches(mut data: BatchData) -> (RecordBatch, RecordBatch, Record
         .map(|tx| (tx.hash.to_vec(), tx))
         .collect::<BTreeMap<_, _>>();
 
-    for receipt in data.receipts.into_iter() {
+    for receipt in data.receipts.into_iter().flat_map(|r| r.into_iter()) {
         let tx = tx_map.remove(receipt.transaction_hash.as_slice()).unwrap();
         assert_eq!(tx.hash, receipt.transaction_hash);
 

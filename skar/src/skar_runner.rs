@@ -64,14 +64,20 @@ impl SkarRunner {
             .context("read config file")?;
         let cfg: Config = toml::de::from_str(&cfg).context("parse config")?;
 
-        let ingest = Ingest::spawn(cfg.ingest);
-
         fs::create_dir_all(&cfg.db.path)
             .await
             .context("create db directory if not exists")?;
 
         let db = Db::new(&cfg.db.path).context("open db")?;
         let db = Arc::new(db);
+
+        let db_next_block_num = db
+            .get_next_block_num()
+            .context("get next block num from db")?;
+
+        let mut ingest_cfg = cfg.ingest;
+        ingest_cfg.inner.from_block = ingest_cfg.inner.from_block.max(db_next_block_num);
+        let ingest = Ingest::spawn(ingest_cfg);
 
         let state = ArcSwap::new(State::new(db).into());
         let state = Arc::new(state);

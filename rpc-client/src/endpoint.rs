@@ -95,6 +95,7 @@ impl Endpoint {
             RpcRequestImpl::GetBlockNumber => None,
             RpcRequestImpl::GetBlockByNumber(block_number) => Some(*block_number),
             RpcRequestImpl::GetTransactionReceipt(block_number, _) => Some(*block_number),
+            RpcRequestImpl::GetBlockReceipts(block_number) => Some(*block_number),
         }
     }
 }

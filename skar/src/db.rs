@@ -55,13 +55,13 @@ impl Db {
             .last::<[u8; 8], Cow<'_, _>>()
             .context("get last element from db")?;
 
-        let last = match last {
-            Some((key, _)) => u64::from_be_bytes(key),
-            None => 0,
-        };
-
-        if from_block != last {
-            return Err(anyhow!("from_block and last block in db don't match"));
+        if let Some((key, _)) = last {
+            let last = u64::from_be_bytes(key);
+            if from_block != last {
+                return Err(anyhow!(
+                    "from_block({from_block}) and last block in db ({last}) don't match"
+                ));
+            }
         }
 
         mem::drop(cursor);
@@ -72,6 +72,27 @@ impl Db {
         txn.commit().context("commit db txn")?;
 
         Ok(())
+    }
+
+    pub fn get_next_block_num(&self) -> Result<u64> {
+        let txn = self
+            .env
+            .begin_ro_txn()
+            .context("begin rw txn to get next block num")?;
+        let db = txn.open_db(None).context("open default db from txn")?;
+
+        let mut cursor = txn.cursor(&db).context("open cursor")?;
+
+        let last = cursor
+            .last::<[u8; 8], Cow<'_, _>>()
+            .context("get last element from db")?;
+
+        let last = match last {
+            Some((key, _)) => u64::from_be_bytes(key),
+            None => 0,
+        };
+
+        Ok(last)
     }
 }
 

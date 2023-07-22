@@ -7,6 +7,7 @@ pub enum RpcRequestImpl {
     GetBlockByNumber(BlockNumber),
     GetLogs(GetLogs),
     GetTransactionReceipt(BlockNumber, Hash),
+    GetBlockReceipts(BlockNumber),
 }
 
 pub enum RpcResponseImpl {
@@ -14,6 +15,7 @@ pub enum RpcResponseImpl {
     GetBlockByNumber(Block<Transaction>),
     GetLogs(Vec<Log>),
     GetTransactionReceipt(TransactionReceipt),
+    GetBlockReceipts(Vec<TransactionReceipt>),
 }
 
 #[derive(Clone)]
@@ -98,6 +100,19 @@ impl From<Vec<GetTransactionReceipt>> for RpcRequest {
     }
 }
 
+#[derive(Clone)]
+pub struct GetBlockReceipts(pub BlockNumber);
+
+impl From<Vec<GetBlockReceipts>> for RpcRequest {
+    fn from(reqs: Vec<GetBlockReceipts>) -> Self {
+        Self::Batch(
+            reqs.into_iter()
+                .map(|v| RpcRequestImpl::GetBlockReceipts(v.0))
+                .collect(),
+        )
+    }
+}
+
 impl TryInto<Block<Transaction>> for RpcResponseImpl {
     type Error = ();
 
@@ -129,6 +144,17 @@ impl TryInto<TransactionReceipt> for RpcResponseImpl {
     fn try_into(self) -> StdResult<TransactionReceipt, Self::Error> {
         match self {
             RpcResponseImpl::GetTransactionReceipt(receipt) => Ok(receipt),
+            _ => Err(()),
+        }
+    }
+}
+
+impl TryInto<Vec<TransactionReceipt>> for RpcResponseImpl {
+    type Error = ();
+
+    fn try_into(self) -> StdResult<Vec<TransactionReceipt>, Self::Error> {
+        match self {
+            RpcResponseImpl::GetBlockReceipts(receipts) => Ok(receipts),
             _ => Err(()),
         }
     }
@@ -199,6 +225,12 @@ impl RpcRequestImpl {
                 "id": idx,
                 "jsonrpc": "2.0",
             }),
+            RpcRequestImpl::GetBlockReceipts(block_num) => serde_json::json!({
+                "method": "eth_getBlockReceipts",
+                "params": [block_num],
+                "id": idx,
+                "jsonrpc": "2.0",
+            }),
         }
     }
 }
@@ -255,6 +287,9 @@ impl RpcRequestImpl {
             Self::GetTransactionReceipt(_, _) => serde_json::from_value(res)
                 .ok()
                 .map(RpcResponseImpl::GetTransactionReceipt),
+            Self::GetBlockReceipts(_) => serde_json::from_value(res)
+                .ok()
+                .map(RpcResponseImpl::GetBlockReceipts),
         }
     }
 }
