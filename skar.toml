@@ -4,8 +4,8 @@ path = "data/db"
 [ingest]
 from_block = 8000000
 to_block = 8100000
-concurrency_limit = 16
-batch_size = 32
+concurrency_limit = 32
+batch_size = 200
 
 [parquet]
 path = "data/parquet"
@@ -31,7 +31,7 @@ http_req_timeout_millis = 5000
 [[ingest.rpc_client.endpoints]]
 url = "https://rpc.ankr.com/eth"
 status_refresh_interval_secs = 10
-req_limit = 10
+req_limit = 200
 req_limit_window_ms = 1000
-get_logs_range_limit = 20
-batch_size_limit = 50
+get_logs_range_limit = 100
+batch_size_limit = 200
