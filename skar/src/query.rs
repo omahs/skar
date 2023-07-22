@@ -106,10 +106,6 @@ fn logs_properties(cfg: &TableConfig) -> WriterProperties {
         .set_column_statistics_enabled("log_index".into(), EnabledStatistics::Page)
         .set_column_statistics_enabled("transaction_index".into(), EnabledStatistics::Page)
         .set_column_bloom_filter_enabled("address".into(), true)
-        .set_column_bloom_filter_enabled("topic0".into(), true)
-        .set_column_bloom_filter_enabled("topic1".into(), true)
-        .set_column_bloom_filter_enabled("topic2".into(), true)
-        .set_column_bloom_filter_enabled("topic3".into(), true)
         .build()
 }
 

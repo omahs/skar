@@ -80,6 +80,7 @@ pub fn transaction() -> SchemaRef {
         Field::new("type", DataType::UInt8, false),
         Field::new("root", hash_dt(), true),
         Field::new("status", DataType::UInt8, true),
+        Field::new("sighash", DataType::FixedSizeBinary(4), true),
     ])
     .into()
 }
@@ -142,6 +143,7 @@ pub fn data_to_batches(mut data: BatchData) -> (RecordBatch, RecordBatch, Record
     let mut tx_type = UInt8Builder::new();
     let mut tx_root = hash_builder();
     let mut tx_status = UInt8Builder::new();
+    let mut tx_sighash = FixedSizeBinaryBuilder::new(4);
 
     let mut log_removed = BooleanBuilder::new();
     let mut log_log_index = UInt64Builder::new();
@@ -205,6 +207,11 @@ pub fn data_to_batches(mut data: BatchData) -> (RecordBatch, RecordBatch, Record
         match receipt.status {
             Some(status) => tx_status.append_value(status.to_u8()),
             None => tx_status.append_null(),
+        }
+        if let Some(sighash) = tx.input.get(..4) {
+            tx_sighash.append_value(sighash).unwrap();
+        } else {
+            tx_sighash.append_null();
         }
 
         for log in receipt.logs.iter() {
@@ -318,6 +325,7 @@ pub fn data_to_batches(mut data: BatchData) -> (RecordBatch, RecordBatch, Record
             Arc::new(tx_type.finish()),
             Arc::new(tx_root.finish()),
             Arc::new(tx_status.finish()),
+            Arc::new(tx_sighash.finish()),
         ],
     )
     .unwrap();
