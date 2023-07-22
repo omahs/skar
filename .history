@@ -1,0 +1,5 @@
+#V2
+CREATE EXTERNAL TABLE taxi\nSTORED AS PARQUET\nLOCATION 'data/parquet/8000000-8000700/blocks.parquet';
+SELECT COUNT(*) from blocks;
+SELECT COUNT(*) from taxi;
+\\q

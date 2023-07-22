@@ -1,13 +1,18 @@
-use std::{path::PathBuf, sync::Arc};
+use std::{
+    path::{Path, PathBuf},
+    sync::Arc,
+};
 
 use crate::{
     config::{ParquetConfig, TableConfig},
     schema,
     skar_runner::State,
 };
-use anyhow::{Context, Result};
+use anyhow::{Context, Error, Result};
+use arrow::{compute::concat_batches, datatypes::SchemaRef, record_batch::RecordBatch};
 use datafusion::{datasource::MemTable, prelude::SessionContext};
 use parquet::{
+    arrow::ArrowWriter,
     basic::Compression,
     file::properties::{EnabledStatistics, WriterProperties, WriterVersion},
     format::SortingColumn,
@@ -43,7 +48,7 @@ fn create_ctx(state: &State) -> Result<SessionContext> {
     Ok(ctx)
 }
 
-fn blocks_properties(cfg: &TableConfig) -> WriterProperties {
+fn blocks_write_properties(cfg: &TableConfig) -> WriterProperties {
     WriterProperties::builder()
         .set_writer_version(WriterVersion::PARQUET_2_0)
         .set_data_page_size_limit(cfg.data_page_size_limit)
@@ -58,7 +63,7 @@ fn blocks_properties(cfg: &TableConfig) -> WriterProperties {
         .build()
 }
 
-fn transactions_properties(cfg: &TableConfig) -> WriterProperties {
+fn transactions_write_properties(cfg: &TableConfig) -> WriterProperties {
     WriterProperties::builder()
         .set_writer_version(WriterVersion::PARQUET_2_0)
         .set_data_page_size_limit(cfg.data_page_size_limit)
@@ -84,7 +89,7 @@ fn transactions_properties(cfg: &TableConfig) -> WriterProperties {
         .build()
 }
 
-fn logs_properties(cfg: &TableConfig) -> WriterProperties {
+fn logs_write_properties(cfg: &TableConfig) -> WriterProperties {
     WriterProperties::builder()
         .set_writer_version(WriterVersion::PARQUET_2_0)
         .set_data_page_size_limit(cfg.data_page_size_limit)
@@ -109,41 +114,65 @@ fn logs_properties(cfg: &TableConfig) -> WriterProperties {
         .build()
 }
 
+async fn write_parquet_file(
+    batches: &[RecordBatch],
+    path: &Path,
+    schema: SchemaRef,
+    props: WriterProperties,
+) -> Result<()> {
+    tokio::task::block_in_place(|| async move {
+        let data = concat_batches(&schema, batches).context("concatenate arrow batches")?;
+
+        let mut file = std::fs::File::create(path).context("create parquet file for writing")?;
+        let mut writer = ArrowWriter::try_new(&mut file, schema, Some(props))
+            .context("create parquet writer")?;
+        writer
+            .write(&data)
+            .context("write arrow data to parquet file")?;
+
+        writer.close().context("close parquet writer")?;
+
+        Ok::<_, Error>(())
+    })
+    .await
+}
+
 pub(crate) async fn write_folder(
     state: &State,
     mut path: PathBuf,
     cfg: &ParquetConfig,
 ) -> Result<()> {
-    let ctx = create_ctx(state).context("create datafusion context")?;
-
-    path.push("blocks");
-    ctx.sql("SELECT * FROM blocks;")
-        .await
-        .context("load blocks")?
-        .write_parquet(path.to_str().unwrap(), Some(blocks_properties(&cfg.blocks)))
-        .await
-        .context("write blocks parquet file")?;
+    path.push("blocks.parquet");
+    write_parquet_file(
+        &state.in_mem.blocks.data,
+        &path,
+        schema::block_header(),
+        blocks_write_properties(&cfg.blocks),
+    )
+    .await
+    .context("write blocks.parquet")?;
     path.pop();
 
-    path.push("transactions");
-    ctx.sql("SELECT * FROM transactions;")
-        .await
-        .context("load transactions")?
-        .write_parquet(
-            path.to_str().unwrap(),
-            Some(transactions_properties(&cfg.transactions)),
-        )
-        .await
-        .context("write transactions parquet file")?;
+    path.push("transactions.parquet");
+    write_parquet_file(
+        &state.in_mem.transactions.data,
+        &path,
+        schema::transaction(),
+        transactions_write_properties(&cfg.transactions),
+    )
+    .await
+    .context("write transactions.parquet")?;
     path.pop();
 
-    path.push("logs");
-    ctx.sql("SELECT * FROM logs;")
-        .await
-        .context("load logs")?
-        .write_parquet(path.to_str().unwrap(), Some(logs_properties(&cfg.logs)))
-        .await
-        .context("write logs parquet file")?;
+    path.push("logs.parquet");
+    write_parquet_file(
+        &state.in_mem.logs.data,
+        &path,
+        schema::log(),
+        logs_write_properties(&cfg.logs),
+    )
+    .await
+    .context("write logs.parquet")?;
     path.pop();
 
     Ok(())

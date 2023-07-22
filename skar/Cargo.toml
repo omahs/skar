@@ -12,10 +12,10 @@ log = "0.4"
 mimalloc = { version = "0.1", default-features = false }
 anyhow = "1"
 tokio = { version = "1", features = ["full"] }
-arrow = "42.0.0"
+arrow = "43.0.0"
 arc-swap = "1"
-datafusion = "27.0.0"
-parquet = "42.0.0"
+datafusion = { git = "https://github.com/apache/arrow-datafusion" }
+parquet = "43.0.0"
 reth-libmdbx = { git = "https://github.com/paradigmxyz/reth" }
 page_size = "0.5.0"
 sbbf-rs-safe = "0.3.2"

@@ -12,7 +12,6 @@ use arc_swap::{access::DynAccess, ArcSwap};
 use arrow::{array::FixedSizeBinaryArray, record_batch::RecordBatch};
 use sbbf_rs_safe::Filter as Sbbf;
 use skar_ingest::Ingest;
-use tokio::fs;
 
 pub struct SkarRunner;
 
@@ -64,7 +63,7 @@ impl SkarRunner {
             .context("read config file")?;
         let cfg: Config = toml::de::from_str(&cfg).context("parse config")?;
 
-        fs::create_dir_all(&cfg.db.path)
+        tokio::fs::create_dir_all(&cfg.db.path)
             .await
             .context("create db directory if not exists")?;
 
@@ -170,9 +169,7 @@ impl Write {
                 let mut path = self.parquet_config.path.clone();
                 path.push(format!("{}-{}", from_block, to_block,));
 
-                fs::remove_dir_all(&path).await.ok();
-
-                fs::create_dir_all(&path)
+                tokio::fs::create_dir_all(&path)
                     .await
                     .context("create parquet directory")?;
 
