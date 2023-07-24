@@ -52,6 +52,7 @@ pub fn block_header() -> SchemaRef {
         Field::new("gas_limit", quantity_dt(), false),
         Field::new("gas_used", quantity_dt(), false),
         Field::new("timestamp", quantity_dt(), false),
+        Field::new("uncles", DataType::Binary, false),
     ])
     .into()
 }
@@ -81,6 +82,7 @@ pub fn transaction() -> SchemaRef {
         Field::new("root", hash_dt(), true),
         Field::new("status", DataType::UInt8, true),
         Field::new("sighash", DataType::FixedSizeBinary(4), true),
+        Field::new("tx_id", DataType::FixedSizeBinary(16), false),
     ])
     .into()
 }
@@ -120,6 +122,7 @@ pub fn data_to_batches(mut data: BatchData) -> (RecordBatch, RecordBatch, Record
     let mut b_gas_limit = quantity_builder();
     let mut b_gas_used = quantity_builder();
     let mut b_timestamp = quantity_builder();
+    let mut b_uncles = BinaryBuilder::new();
 
     let mut tx_block_hash = hash_builder();
     let mut tx_block_number = UInt64Builder::new();
@@ -144,6 +147,7 @@ pub fn data_to_batches(mut data: BatchData) -> (RecordBatch, RecordBatch, Record
     let mut tx_root = hash_builder();
     let mut tx_status = UInt8Builder::new();
     let mut tx_sighash = FixedSizeBinaryBuilder::new(4);
+    let mut tx_tx_id = FixedSizeBinaryBuilder::new(16);
 
     let mut log_removed = BooleanBuilder::new();
     let mut log_log_index = UInt64Builder::new();
@@ -213,6 +217,12 @@ pub fn data_to_batches(mut data: BatchData) -> (RecordBatch, RecordBatch, Record
         } else {
             tx_sighash.append_null();
         }
+        tx_tx_id
+            .append_value(concat_u64(
+                tx.block_number.into(),
+                tx.transaction_index.into(),
+            ))
+            .unwrap();
 
         for log in receipt.logs.iter() {
             log_removed.append_value(log.removed);
@@ -275,6 +285,10 @@ pub fn data_to_batches(mut data: BatchData) -> (RecordBatch, RecordBatch, Record
         b_gas_limit.append_value(&*block.header.gas_limit);
         b_gas_used.append_value(&*block.header.gas_used);
         b_timestamp.append_value(&*block.header.timestamp);
+        b_uncles.append_value(block.header.uncles.iter().fold(Vec::new(), |mut v, b| {
+            v.extend_from_slice(b.as_slice());
+            v
+        }));
     }
 
     let blocks = RecordBatch::try_new(
@@ -296,6 +310,7 @@ pub fn data_to_batches(mut data: BatchData) -> (RecordBatch, RecordBatch, Record
             Arc::new(b_gas_limit.finish()),
             Arc::new(b_gas_used.finish()),
             Arc::new(b_timestamp.finish()),
+            Arc::new(b_uncles.finish()),
         ],
     )
     .unwrap();
@@ -326,6 +341,7 @@ pub fn data_to_batches(mut data: BatchData) -> (RecordBatch, RecordBatch, Record
             Arc::new(tx_root.finish()),
             Arc::new(tx_status.finish()),
             Arc::new(tx_sighash.finish()),
+            Arc::new(tx_tx_id.finish()),
         ],
     )
     .unwrap();
@@ -350,4 +366,13 @@ pub fn data_to_batches(mut data: BatchData) -> (RecordBatch, RecordBatch, Record
     .unwrap();
 
     (blocks, transactions, logs)
+}
+
+pub fn concat_u64(a: u64, b: u64) -> [u8; 16] {
+    let mut buf = [0; 16];
+
+    buf[..8].copy_from_slice(a.to_be_bytes().as_slice());
+    buf[8..].copy_from_slice(b.to_be_bytes().as_slice());
+
+    buf
 }

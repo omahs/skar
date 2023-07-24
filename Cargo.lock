@@ -2432,10 +2432,13 @@ version = "0.0.1"
 dependencies = [
  "anyhow",
  "arc-swap",
+ "arrayvec",
  "arrow",
  "clap",
  "datafusion",
  "env_logger",
+ "futures",
+ "itertools 0.11.0",
  "log",
  "mimalloc",
  "page_size",

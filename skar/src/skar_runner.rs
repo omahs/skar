@@ -3,8 +3,9 @@ use std::{cmp, collections::BTreeSet, sync::Arc};
 use crate::{
     config::{Config, ParquetConfig},
     db::Db,
-    query::{self, write_folder},
+    query,
     schema::data_to_batches,
+    write_parquet::write_folder,
     Args,
 };
 use anyhow::{Context, Result};
@@ -106,7 +107,7 @@ impl SkarRunner {
     }
 }
 
-fn build_filter(in_mem: &InMemory) -> Sbbf {
+pub fn build_addr_set(in_mem: &InMemory) -> BTreeSet<Vec<u8>> {
     let mut addrs = BTreeSet::new();
 
     for batch in in_mem.transactions.data.iter() {
@@ -119,7 +120,7 @@ fn build_filter(in_mem: &InMemory) -> Sbbf {
                 .unwrap();
 
             for addr in col.iter().flatten() {
-                addrs.insert(addr);
+                addrs.insert(addr.to_vec());
             }
         }
     }
@@ -133,13 +134,17 @@ fn build_filter(in_mem: &InMemory) -> Sbbf {
             .unwrap();
 
         for addr in col.iter().flatten() {
-            addrs.insert(addr);
+            addrs.insert(addr.to_vec());
         }
     }
 
+    addrs
+}
+
+fn build_filter(addrs: &BTreeSet<Vec<u8>>) -> Sbbf {
     let mut filter = Sbbf::new(8, cmp::min(addrs.len() * 2, 16 * 1024));
 
-    for addr in addrs {
+    for addr in addrs.iter() {
         filter.insert_hash(wyhash::wyhash(addr, 0));
     }
 
@@ -155,8 +160,6 @@ struct Write {
 impl Write {
     async fn spawn(mut self) -> Result<()> {
         while let Ok(data) = self.ingest.recv().await {
-            println!("GOT DATA");
-
             let mut state: Arc<State> = self.state.load_full();
 
             if state.in_mem.blocks.num_rows >= self.parquet_config.blocks.max_file_size
@@ -173,17 +176,20 @@ impl Write {
                     .await
                     .context("create parquet directory")?;
 
-                write_folder(&state, path, &self.parquet_config)
-                    .await
-                    .context("write parquet folder")?;
+                let addr_set = build_addr_set(&state.in_mem);
+
+                write_folder(
+                    &state,
+                    path,
+                    &self.parquet_config,
+                    addr_set.len().try_into().unwrap(),
+                )
+                .await
+                .context("write parquet folder")?;
 
                 state
                     .db
-                    .insert_folder_record(
-                        from_block,
-                        to_block,
-                        build_filter(&state.in_mem).as_bytes(),
-                    )
+                    .insert_folder_record(from_block, to_block, build_filter(&addr_set).as_bytes())
                     .context("insert folder record")?;
 
                 state = Arc::new(State::new(state.db.clone()));
