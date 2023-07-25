@@ -143,7 +143,7 @@ async fn write_parquet_file(
     schema: SchemaRef,
     props: WriterProperties,
 ) -> Result<()> {
-    tokio::task::block_in_place(|| async move {
+    tokio::task::block_in_place(|| {
         let data = concat_batches(&schema, batches).context("concatenate arrow batches")?;
 
         let mut file = std::fs::File::create(path).context("create parquet file for writing")?;
@@ -157,7 +157,6 @@ async fn write_parquet_file(
 
         Ok::<_, Error>(())
     })
-    .await
 }
 
 pub(crate) async fn write_folder(

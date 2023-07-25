@@ -73,11 +73,20 @@ async fn create_ctx_from_folder(path: &Path) -> Result<SessionContext> {
 
 #[allow(dead_code)]
 pub(crate) async fn query_mem(state: &State, query: &Query) -> Result<QueryResult> {
+    if let Some(to_block) = query.to_block {
+        if state.in_mem.from_block >= to_block {
+            return Ok(QueryResult::default());
+        }
+    }
+
+    if state.in_mem.to_block <= query.from_block {
+        return Ok(QueryResult::default());
+    }
+
     let ctx = create_ctx_from_state(state).context("create context")?;
     execute_query(&ctx, query).await
 }
 
-#[allow(dead_code)]
 pub(crate) async fn query_folder(path: &Path, query: &Query) -> Result<QueryResult> {
     let ctx = create_ctx_from_folder(path)
         .await
@@ -89,12 +98,16 @@ async fn execute_query(ctx: &SessionContext, query: &Query) -> Result<QueryResul
     let mut blk_set = BTreeSet::<u64>::new();
     let mut tx_set = BTreeSet::<(u64, u64)>::new();
 
-    let mut logs_df = query_logs(ctx, query)
-        .await
-        .context("query logs")?
-        .collect()
-        .await
-        .context("collect logs")?;
+    let mut logs_df = if !query.logs.is_empty() {
+        query_logs(ctx, query)
+            .await
+            .context("query logs")?
+            .collect()
+            .await
+            .context("collect logs")?
+    } else {
+        Vec::new()
+    };
 
     for batch in logs_df.iter_mut() {
         let blk_num = batch
@@ -133,12 +146,16 @@ async fn execute_query(ctx: &SessionContext, query: &Query) -> Result<QueryResul
         *batch = batch.project(&indices).context("project log columns")?;
     }
 
-    let mut transactions_df = query_transactions(ctx, query, tx_set)
-        .await
-        .context("query transactions")?
-        .collect()
-        .await
-        .context("collect transactions")?;
+    let mut transactions_df = if !query.transactions.is_empty() || !tx_set.is_empty() {
+        query_transactions(ctx, query, tx_set)
+            .await
+            .context("query transactions")?
+            .collect()
+            .await
+            .context("collect transactions")?
+    } else {
+        Vec::new()
+    };
 
     for batch in transactions_df.iter_mut() {
         let blk_num = batch
@@ -169,12 +186,16 @@ async fn execute_query(ctx: &SessionContext, query: &Query) -> Result<QueryResul
         *batch = batch.project(&indices).context("project tx columns")?;
     }
 
-    let blocks_df = query_blocks(ctx, query, blk_set)
-        .await
-        .context("query blocks")?
-        .collect()
-        .await
-        .context("collect blocks")?;
+    let blocks_df = if query.include_all_blocks || !blk_set.is_empty() {
+        query_blocks(ctx, query, blk_set)
+            .await
+            .context("query blocks")?
+            .collect()
+            .await
+            .context("collect blocks")?
+    } else {
+        Vec::new()
+    };
 
     Ok(QueryResult {
         logs: logs_df,

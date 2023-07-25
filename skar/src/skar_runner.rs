@@ -68,7 +68,7 @@ impl SkarRunner {
             .await
             .context("create db directory if not exists")?;
 
-        let db = Db::new(&cfg.db.path).context("open db")?;
+        let db = Db::new(&cfg.db.path, &cfg.parquet.path).context("open db")?;
         let db = Arc::new(db);
 
         let db_next_block_num = db
@@ -190,6 +190,7 @@ impl Write {
                 state
                     .db
                     .insert_folder_record(from_block, to_block, build_filter(&addr_set).as_bytes())
+                    .await
                     .context("insert folder record")?;
 
                 state = Arc::new(State::new(state.db.clone()));

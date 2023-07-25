@@ -24,14 +24,14 @@ pub struct TransactionSelection {
     pub to: Vec<Address>,
     #[serde(default)]
     pub sighash: Vec<Sighash>,
-    pub status: Option<u32>,
+    pub status: Option<u8>,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
 #[serde(rename_all = "camelCase")]
 pub struct Query {
-    pub from_block: u32,
-    pub to_block: Option<u32>,
+    pub from_block: u64,
+    pub to_block: Option<u64>,
     #[serde(default)]
     pub logs: Vec<LogSelection>,
     #[serde(default)]
@@ -52,6 +52,7 @@ pub struct FieldSelection {
     pub log: BTreeSet<String>,
 }
 
+#[derive(Default)]
 pub struct QueryResult {
     pub logs: Vec<RecordBatch>,
     pub transactions: Vec<RecordBatch>,
