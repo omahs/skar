@@ -1,3 +1,8 @@
+[http_server]
+addr = "127.0.0.1:1131"
+response_size_limit_mb = 30
+response_time_limit_ms = 5000
+
 [db]
 path = "data/db"
 

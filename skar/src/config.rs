@@ -1,4 +1,4 @@
-use std::path::PathBuf;
+use std::{net::SocketAddr, path::PathBuf};
 
 use serde::{Deserialize, Serialize};
 use skar_ingest::IngestConfig;
@@ -8,6 +8,14 @@ pub struct Config {
     pub ingest: IngestConfig,
     pub parquet: ParquetConfig,
     pub db: DbConfig,
+    pub http_server: HttpServerConfig,
+}
+
+#[derive(Serialize, Deserialize)]
+pub struct HttpServerConfig {
+    pub addr: SocketAddr,
+    pub response_size_limit_mb: usize,
+    pub response_time_limit_ms: u64,
 }
 
 #[derive(Serialize, Deserialize)]

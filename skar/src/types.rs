@@ -8,7 +8,6 @@ use skar_format::{Address, FixedSizeData, LogArgument};
 pub type Sighash = FixedSizeData<4>;
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
-#[serde(rename_all = "camelCase")]
 pub struct LogSelection {
     #[serde(default)]
     pub address: Vec<Address>,
@@ -16,7 +15,6 @@ pub struct LogSelection {
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
-#[serde(rename_all = "camelCase")]
 pub struct TransactionSelection {
     #[serde(default)]
     pub from: Vec<Address>,
@@ -28,7 +26,6 @@ pub struct TransactionSelection {
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
-#[serde(rename_all = "camelCase")]
 pub struct Query {
     pub from_block: u64,
     pub to_block: Option<u64>,
@@ -54,6 +51,12 @@ pub struct FieldSelection {
 
 #[derive(Default)]
 pub struct QueryResult {
+    pub data: QueryResultData,
+    pub next_block: u64,
+}
+
+#[derive(Default)]
+pub struct QueryResultData {
     pub logs: Vec<RecordBatch>,
     pub transactions: Vec<RecordBatch>,
     pub blocks: Vec<RecordBatch>,

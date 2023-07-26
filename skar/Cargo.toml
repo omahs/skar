@@ -14,7 +14,7 @@ anyhow = "1"
 tokio = { version = "1", features = ["full"] }
 arrow = "43.0.0"
 arc-swap = "1"
-datafusion = { git = "https://github.com/apache/arrow-datafusion" }
+datafusion = "28.0.0"
 parquet = "43.0.0"
 reth-libmdbx = { git = "https://github.com/paradigmxyz/reth" }
 page_size = "0.5.0"
@@ -23,6 +23,10 @@ wyhash = "0.5.0"
 futures = "0.3"
 arrayvec = { version = "0.7", features = ["serde"] }
 itertools = "0.11"
+axum = "0.6"
+tower = "0.4"
+tower-http = { version = "0.4", features = ["compression-gzip"] }
+serde_json = "1"
 
 skar-format = { path = "../format" }
 skar-ingest = { path = "../ingest" }

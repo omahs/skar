@@ -88,28 +88,29 @@ impl Db {
         })
     }
 
-    pub fn get_next_block_num(&self) -> Result<u64> {
-        let txn = self
-            .env
-            .begin_ro_txn()
-            .context("begin read only txn to get next block num")?;
-        let db = txn.open_db(None).context("open default db from txn")?;
+    pub async fn get_next_block_num(&self) -> Result<u64> {
+        tokio::task::block_in_place(|| {
+            let txn = self
+                .env
+                .begin_ro_txn()
+                .context("begin read only txn to get next block num")?;
+            let db = txn.open_db(None).context("open default db from txn")?;
 
-        let mut cursor = txn.cursor(&db).context("open cursor")?;
+            let mut cursor = txn.cursor(&db).context("open cursor")?;
 
-        let last = cursor
-            .last::<[u8; 8], Cow<'_, _>>()
-            .context("get last element from db")?;
+            let last = cursor
+                .last::<[u8; 8], Cow<'_, _>>()
+                .context("get last element from db")?;
 
-        let last = match last {
-            Some((key, _)) => u64::from_be_bytes(key),
-            None => 0,
-        };
+            let last = match last {
+                Some((key, _)) => u64::from_be_bytes(key),
+                None => 0,
+            };
 
-        Ok(last)
+            Ok(last)
+        })
     }
 
-    #[allow(dead_code)]
     pub async fn query(&self, query: &Query, tx: mpsc::Sender<Result<QueryResult>>) -> Result<()> {
         tokio::task::block_in_place(|| {
             let txn = self
@@ -151,7 +152,10 @@ impl Db {
 
                 let tx = tx.clone();
                 let stop = tokio::runtime::Handle::current().block_on(async move {
-                    let res = query_folder(&path, &query).await;
+                    let res = query_folder(&path, &query).await.map(|data| QueryResult {
+                        data,
+                        next_block: next,
+                    });
                     tx.send(res).await.is_err()
                 });
 

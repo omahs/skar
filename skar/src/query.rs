@@ -3,7 +3,7 @@ use std::{collections::BTreeSet, path::Path, sync::Arc};
 use crate::{
     schema::{self, concat_u64},
     skar_runner::State,
-    types::{LogSelection, Query, QueryResult, TransactionSelection},
+    types::{LogSelection, Query, QueryResultData, TransactionSelection},
 };
 use anyhow::{anyhow, Context, Result};
 use arrow::{
@@ -64,37 +64,28 @@ async fn create_ctx_from_folder(path: &Path) -> Result<SessionContext> {
             },
         )
         .await
-        .context("register {table_name} parquet into df context")?;
+        .context(format!(
+            "register {table_name} parquet into df context. Path was {path_str}"
+        ))?;
         path.pop();
     }
 
     Ok(ctx)
 }
 
-#[allow(dead_code)]
-pub(crate) async fn query_mem(state: &State, query: &Query) -> Result<QueryResult> {
-    if let Some(to_block) = query.to_block {
-        if state.in_mem.from_block >= to_block {
-            return Ok(QueryResult::default());
-        }
-    }
-
-    if state.in_mem.to_block <= query.from_block {
-        return Ok(QueryResult::default());
-    }
-
+pub(crate) async fn query_mem(state: &State, query: &Query) -> Result<QueryResultData> {
     let ctx = create_ctx_from_state(state).context("create context")?;
     execute_query(&ctx, query).await
 }
 
-pub(crate) async fn query_folder(path: &Path, query: &Query) -> Result<QueryResult> {
+pub(crate) async fn query_folder(path: &Path, query: &Query) -> Result<QueryResultData> {
     let ctx = create_ctx_from_folder(path)
         .await
         .context("create context")?;
     execute_query(&ctx, query).await
 }
 
-async fn execute_query(ctx: &SessionContext, query: &Query) -> Result<QueryResult> {
+async fn execute_query(ctx: &SessionContext, query: &Query) -> Result<QueryResultData> {
     let mut blk_set = BTreeSet::<u64>::new();
     let mut tx_set = BTreeSet::<(u64, u64)>::new();
 
@@ -197,7 +188,7 @@ async fn execute_query(ctx: &SessionContext, query: &Query) -> Result<QueryResul
         Vec::new()
     };
 
-    Ok(QueryResult {
+    Ok(QueryResultData {
         logs: logs_df,
         transactions: transactions_df,
         blocks: blocks_df,
@@ -363,54 +354,4 @@ fn log_selection_to_expr(s: &LogSelection) -> Expr {
     }
 
     expr
-}
-
-pub(crate) async fn query(state: &State) -> Result<()> {
-    let ctx = create_ctx_from_state(state).context("create datafusion context")?;
-
-    ctx.sql(
-        "
-		SELECT COUNT(*) as block_count from blocks; 
-	",
-    )
-    .await
-    .context("execute sql query")?
-    .show()
-    .await
-    .context("show block data frame")?;
-
-    ctx.sql(
-        "
-        SELECT COUNT(*) as tx_count from transactions; 
-    ",
-    )
-    .await
-    .context("execute sql query")?
-    .show()
-    .await
-    .context("show tx dataframe")?;
-
-    ctx.sql(
-        "
-        SELECT COUNT(*) as log_count from logs; 
-    ",
-    )
-    .await
-    .context("execute sql query")?
-    .show()
-    .await
-    .context("show log dataframe")?;
-
-    ctx.sql(
-        "
-        SELECT MAX(number) as max_block_num from blocks; 
-    ",
-    )
-    .await
-    .context("execute sql query")?
-    .show()
-    .await
-    .context("show max_block_num dataframe")?;
-
-    Ok(())
 }

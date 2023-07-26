@@ -3,13 +3,12 @@ use std::{cmp, collections::BTreeSet, sync::Arc};
 use crate::{
     config::{Config, ParquetConfig},
     db::Db,
-    query,
     schema::data_to_batches,
     write_parquet::write_folder,
     Args,
 };
 use anyhow::{Context, Result};
-use arc_swap::{access::DynAccess, ArcSwap};
+use arc_swap::ArcSwap;
 use arrow::{array::FixedSizeBinaryArray, record_batch::RecordBatch};
 use sbbf_rs_safe::Filter as Sbbf;
 use skar_ingest::Ingest;
@@ -73,6 +72,7 @@ impl SkarRunner {
 
         let db_next_block_num = db
             .get_next_block_num()
+            .await
             .context("get next block num from db")?;
 
         let mut ingest_cfg = cfg.ingest;
@@ -96,14 +96,9 @@ impl SkarRunner {
             }
         });
 
-        let mut interval = tokio::time::interval(tokio::time::Duration::from_secs(10));
-
-        loop {
-            interval.tick().await;
-            query::query(&state.load())
-                .await
-                .context("run datafusion query")?;
-        }
+        crate::server::run(cfg.http_server, state)
+            .await
+            .context("run http server")
     }
 }
 
