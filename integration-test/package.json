@@ -1,0 +1,8 @@
+{
+  "dependencies": {
+    "ethers": "^6.6.5"
+  },
+  "scripts": {
+    "start": "node src/compare-get-logs.js"
+  }
+}
