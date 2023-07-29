@@ -5,7 +5,15 @@ use std::time::Instant;
 
 use anyhow::Context;
 use arc_swap::ArcSwap;
+use arrow::array::BinaryArray;
+use arrow::array::FixedSizeBinaryArray;
+use arrow::array::StringArray;
+use arrow::array::StringBuilder;
+use arrow::datatypes::DataType;
+use arrow::datatypes::Field;
+use arrow::datatypes::Schema;
 use arrow::json::writer::record_batches_to_json_rows;
+use arrow::record_batch::RecordBatch;
 use axum::extract::Json as ReqJson;
 use axum::extract::State as AxumState;
 use axum::http::StatusCode;
@@ -83,7 +91,11 @@ async fn run_query(
     tokio::spawn({
         let db = data_state.db.clone();
         let query = query.clone();
-        async move { db.query(&query, tx).await }
+        async move {
+            if let Err(e) = db.query(&query, tx).await {
+                log::error!("failed to run query: {:?}", e);
+            }
+        }
     });
 
     let height = get_archive_height(&data_state)
@@ -134,6 +146,9 @@ async fn run_query(
         extend_bytes_with_data(&mut bytes, &in_mem_res)?;
 
         next_block = data_state.in_mem.to_block;
+        if let Some(to_block) = query.to_block {
+            next_block = next_block.min(to_block);
+        }
     }
 
     write!(
@@ -155,6 +170,8 @@ async fn run_query(
 }
 
 fn extend_bytes_with_data(bytes: &mut Vec<u8>, data: &QueryResultData) -> Result<(), AppError> {
+    let data = hex_encode_data(data).context("hex encode the data")?;
+
     bytes.push(b'{');
 
     let mut put_comma = false;
@@ -221,4 +238,69 @@ where
     fn from(err: E) -> Self {
         Self(err.into())
     }
+}
+
+fn hex_encode_data(res: &QueryResultData) -> anyhow::Result<QueryResultData> {
+    let encode_batches = |batches: &[RecordBatch]| {
+        batches
+            .iter()
+            .map(hex_encode_batch)
+            .collect::<anyhow::Result<Vec<_>>>()
+    };
+
+    let logs = encode_batches(&res.logs)?;
+    let transactions = encode_batches(&res.transactions)?;
+    let blocks = encode_batches(&res.blocks)?;
+
+    Ok(QueryResultData {
+        logs,
+        transactions,
+        blocks,
+    })
+}
+
+fn hex_encode_batch(batch: &RecordBatch) -> anyhow::Result<RecordBatch> {
+    let mut fields = Vec::new();
+    let mut cols = Vec::new();
+
+    for (idx, field) in batch.schema().fields().iter().enumerate() {
+        let col = batch.column(idx);
+        let col = match col.data_type() {
+            DataType::Binary => Arc::new(hex_encode(col.as_any().downcast_ref().unwrap())),
+            DataType::FixedSizeBinary(_) => {
+                Arc::new(hex_encode_fixed(col.as_any().downcast_ref().unwrap()))
+            }
+            _ => col.clone(),
+        };
+
+        let field = field.clone();
+        fields.push(Field::new(
+            field.name(),
+            col.data_type().clone(),
+            field.is_nullable(),
+        ));
+        cols.push(col);
+    }
+
+    RecordBatch::try_new(Arc::new(Schema::new(fields)), cols).context("build record batch")
+}
+
+fn hex_encode(input: &BinaryArray) -> StringArray {
+    let mut arr = StringBuilder::new();
+
+    for buf in input.iter() {
+        arr.append_option(buf.map(hex::encode));
+    }
+
+    arr.finish()
+}
+
+fn hex_encode_fixed(input: &FixedSizeBinaryArray) -> StringArray {
+    let mut arr = StringBuilder::new();
+
+    for buf in input.iter() {
+        arr.append_option(buf.map(hex::encode));
+    }
+
+    arr.finish()
 }

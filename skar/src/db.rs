@@ -65,22 +65,27 @@ impl Db {
             let mut cursor = txn.cursor(&db).context("open cursor")?;
 
             let last = cursor
-                .last::<[u8; 8], Cow<'_, _>>()
+                .last::<[u8; 16], Cow<'_, _>>()
                 .context("get last element from db")?;
 
             if let Some((key, _)) = last {
-                let last = u64::from_be_bytes(key);
-                if from_block != last {
+                let (_, last_to_block) = block_range_from_key(key);
+                if from_block != last_to_block {
                     return Err(anyhow!(
-                        "from_block({from_block}) and last block in db ({last}) don't match"
+                        "from_block({from_block}) and last to_block in db ({last_to_block}) don't match"
                     ));
                 }
             }
 
             mem::drop(cursor);
 
-            txn.put(db.dbi(), to_block.to_be_bytes(), filter, Default::default())
-                .context("insert folder record into db")?;
+            txn.put(
+                db.dbi(),
+                block_range_to_key(from_block, to_block),
+                filter,
+                Default::default(),
+            )
+            .context("insert folder record into db")?;
 
             txn.commit().context("commit db txn")?;
 
@@ -99,11 +104,11 @@ impl Db {
             let mut cursor = txn.cursor(&db).context("open cursor")?;
 
             let last = cursor
-                .last::<[u8; 8], Cow<'_, _>>()
+                .last::<[u8; 16], Cow<'_, _>>()
                 .context("get last element from db")?;
 
             let last = match last {
-                Some((key, _)) => u64::from_be_bytes(key),
+                Some((key, _)) => block_range_from_key(key).1,
                 None => 0,
             };
 
@@ -121,49 +126,39 @@ impl Db {
 
             let mut cursor = txn.cursor(&db).context("open cursor")?;
 
-            let key = query.from_block.to_be_bytes();
-            let kv = cursor
-                .set_range::<[u8; 8], Cow<'_, _>>(key.as_slice())
-                .context("set range of cursor")?;
-            match kv {
-                Some((k, _)) => {
-                    if k != key {
-                        cursor
-                            .prev::<[u8; 8], Cow<'_, _>>()
-                            .context("cursor.prev")?;
+            let key = block_range_to_key(query.from_block, 0);
+
+            for kv in cursor.iter_from::<[u8; 16], Cow<'_, _>>(key.as_slice()) {
+                let (key, filter) = kv.context("iter db")?;
+                let (from, to) = block_range_from_key(key);
+
+                if let Some(to_block) = query.to_block {
+                    if to_block <= from {
+                        break;
                     }
                 }
-                None => return Ok(()),
-            }
 
-            let prev = match cursor.prev::<[u8; 8], Cow<'_, _>>().context("get prev")? {
-                Some((k, _)) => u64::from_be_bytes(k),
-                None => 0,
-            };
-
-            let mut prev = prev;
-            for kv in cursor.iter::<[u8; 8], Cow<'_, _>>() {
-                let (next, filter) = kv.context("iter db")?;
-                let next = u64::from_be_bytes(next);
                 let query = prune_query(query.clone(), &filter);
 
                 let mut path = self.parquet_path.clone();
-                path.push(format!("{}-{}", prev, next));
+                path.push(format!("{}-{}", from, to));
 
                 let tx = tx.clone();
                 let stop = tokio::runtime::Handle::current().block_on(async move {
-                    let res = query_folder(&path, &query).await.map(|data| QueryResult {
-                        data,
-                        next_block: next,
-                    });
+                    let mut next_block = to;
+                    if let Some(to_block) = query.to_block {
+                        next_block = next_block.min(to_block);
+                    }
+
+                    let res = query_folder(&path, &query)
+                        .await
+                        .map(|data| QueryResult { data, next_block });
                     tx.send(res).await.is_err()
                 });
 
                 if stop {
                     break;
                 }
-
-                prev = next;
             }
 
             Ok(())
@@ -186,7 +181,7 @@ fn prune_query(query: Query, filter: &[u8]) -> Query {
                 Some(out)
             }
         } else {
-            Some(Vec::new())
+            Some(Default::default())
         }
     };
 
@@ -236,3 +231,19 @@ pub(crate) fn default_page_size() -> usize {
 const DEFAULT_MAX_READERS: u64 = 32_000;
 
 const GIGABYTE: usize = 1024 * 1024 * 1024;
+
+fn block_range_to_key(from_block: u64, to_block: u64) -> [u8; 16] {
+    let mut buf = [0; 16];
+
+    buf[..8].copy_from_slice(from_block.to_be_bytes().as_slice());
+    buf[8..].copy_from_slice(to_block.to_be_bytes().as_slice());
+
+    buf
+}
+
+fn block_range_from_key(key: [u8; 16]) -> (u64, u64) {
+    (
+        u64::from_be_bytes(key[..8].try_into().unwrap()),
+        u64::from_be_bytes(key[8..].try_into().unwrap()),
+    )
+}

@@ -26,8 +26,7 @@ fn blocks_write_properties(cfg: &TableConfig) -> WriterProperties {
             nulls_first: false,
         }]))
         .set_bloom_filter_enabled(false)
-        .set_statistics_enabled(EnabledStatistics::None)
-        .set_column_statistics_enabled("number".into(), EnabledStatistics::Chunk)
+        .set_column_statistics_enabled("number".into(), EnabledStatistics::Page)
         // Encoding
         .set_column_encoding("number".into(), Encoding::DELTA_BINARY_PACKED)
         .set_column_encoding("difficulty".into(), Encoding::DELTA_LENGTH_BYTE_ARRAY)
@@ -64,10 +63,9 @@ fn transactions_write_properties(
             },
         ]))
         .set_bloom_filter_enabled(false)
-        .set_statistics_enabled(EnabledStatistics::None)
-        .set_column_statistics_enabled("block_number".into(), EnabledStatistics::Chunk)
-        .set_column_statistics_enabled("transaction_index".into(), EnabledStatistics::Chunk)
-        .set_column_statistics_enabled("tx_id".into(), EnabledStatistics::Chunk)
+        .set_column_statistics_enabled("block_number".into(), EnabledStatistics::Page)
+        .set_column_statistics_enabled("transaction_index".into(), EnabledStatistics::Page)
+        .set_column_statistics_enabled("tx_id".into(), EnabledStatistics::Page)
         // Setup bloom filter
         .set_column_bloom_filter_enabled("from".into(), true)
         .set_column_bloom_filter_fpp("from".into(), 0.01)
@@ -121,10 +119,9 @@ fn logs_write_properties(cfg: &TableConfig, address_ndv: u64) -> WriterPropertie
             },
         ]))
         .set_bloom_filter_enabled(false)
-        .set_statistics_enabled(EnabledStatistics::None)
-        .set_column_statistics_enabled("block_number".into(), EnabledStatistics::Chunk)
-        .set_column_statistics_enabled("log_index".into(), EnabledStatistics::Chunk)
-        .set_column_statistics_enabled("transaction_index".into(), EnabledStatistics::Chunk)
+        .set_column_statistics_enabled("block_number".into(), EnabledStatistics::Page)
+        .set_column_statistics_enabled("log_index".into(), EnabledStatistics::Page)
+        .set_column_statistics_enabled("transaction_index".into(), EnabledStatistics::Page)
         // Setup bloom filter
         .set_column_bloom_filter_enabled("address".into(), true)
         .set_column_bloom_filter_fpp("address".into(), 0.01)

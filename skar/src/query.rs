@@ -6,14 +6,11 @@ use crate::{
     types::{LogSelection, Query, QueryResultData, TransactionSelection},
 };
 use anyhow::{anyhow, Context, Result};
-use arrow::{
-    array::UInt64Array,
-    datatypes::{DataType, SchemaRef},
-};
+use arrow::{array::UInt64Array, datatypes::SchemaRef, record_batch::RecordBatch};
 use datafusion::{
     datasource::MemTable,
     logical_expr::Literal,
-    prelude::{col, encode, DataFrame, Expr, ParquetReadOptions, SessionContext},
+    prelude::{col, DataFrame, Expr, ParquetReadOptions, SessionContext},
 };
 use itertools::Itertools;
 
@@ -89,7 +86,7 @@ async fn execute_query(ctx: &SessionContext, query: &Query) -> Result<QueryResul
     let mut blk_set = BTreeSet::<u64>::new();
     let mut tx_set = BTreeSet::<(u64, u64)>::new();
 
-    let mut logs_df = if !query.logs.is_empty() {
+    let logs = if !query.logs.is_empty() {
         query_logs(ctx, query)
             .await
             .context("query logs")?
@@ -100,44 +97,33 @@ async fn execute_query(ctx: &SessionContext, query: &Query) -> Result<QueryResul
         Vec::new()
     };
 
-    for batch in logs_df.iter_mut() {
-        let blk_num = batch
-            .column_by_name("blk_num")
-            .unwrap()
-            .as_any()
-            .downcast_ref::<UInt64Array>()
-            .unwrap();
-        let tx_idx = batch
-            .column_by_name("tx_idx")
-            .unwrap()
-            .as_any()
-            .downcast_ref::<UInt64Array>()
-            .unwrap();
+    let logs = logs
+        .into_iter()
+        .filter_map(|batch| {
+            let blk_num = batch
+                .column_by_name("block_number")
+                .unwrap()
+                .as_any()
+                .downcast_ref::<UInt64Array>()
+                .unwrap();
+            let tx_idx = batch
+                .column_by_name("transaction_index")
+                .unwrap()
+                .as_any()
+                .downcast_ref::<UInt64Array>()
+                .unwrap();
 
-        for (b, t) in blk_num.iter().zip(tx_idx.iter()) {
-            let (b, t) = (b.unwrap(), t.unwrap());
-            tx_set.insert((b, t));
-            blk_set.insert(b);
-        }
+            for (b, t) in blk_num.iter().zip(tx_idx.iter()) {
+                let (b, t) = (b.unwrap(), t.unwrap());
+                tx_set.insert((b, t));
+                blk_set.insert(b);
+            }
 
-        // remove fields that were added for joining
-        let indices = batch
-            .schema()
-            .fields
-            .iter()
-            .enumerate()
-            .filter_map(|(idx, field)| {
-                if field.name() != "blk_num" && field.name() != "tx_idx" {
-                    Some(idx)
-                } else {
-                    None
-                }
-            })
-            .collect::<Vec<_>>();
-        *batch = batch.project(&indices).context("project log columns")?;
-    }
+            project_batch(&batch, &query.field_selection.log).transpose()
+        })
+        .collect::<Result<Vec<_>>>()?;
 
-    let mut transactions_df = if !query.transactions.is_empty() || !tx_set.is_empty() {
+    let transactions = if !query.transactions.is_empty() || !tx_set.is_empty() {
         query_transactions(ctx, query, tx_set)
             .await
             .context("query transactions")?
@@ -148,36 +134,25 @@ async fn execute_query(ctx: &SessionContext, query: &Query) -> Result<QueryResul
         Vec::new()
     };
 
-    for batch in transactions_df.iter_mut() {
-        let blk_num = batch
-            .column_by_name("blk_num")
-            .unwrap()
-            .as_any()
-            .downcast_ref::<UInt64Array>()
-            .unwrap();
+    let transactions = transactions
+        .into_iter()
+        .filter_map(|batch| {
+            let blk_num = batch
+                .column_by_name("block_number")
+                .unwrap()
+                .as_any()
+                .downcast_ref::<UInt64Array>()
+                .unwrap();
 
-        for b in blk_num.iter() {
-            blk_set.insert(b.unwrap());
-        }
+            for b in blk_num.iter() {
+                blk_set.insert(b.unwrap());
+            }
 
-        // remove fields that were added for joining
-        let indices = batch
-            .schema()
-            .fields
-            .iter()
-            .enumerate()
-            .filter_map(|(idx, field)| {
-                if field.name() != "blk_num" {
-                    Some(idx)
-                } else {
-                    None
-                }
-            })
-            .collect::<Vec<_>>();
-        *batch = batch.project(&indices).context("project tx columns")?;
-    }
+            project_batch(&batch, &query.field_selection.transaction).transpose()
+        })
+        .collect::<Result<Vec<_>>>()?;
 
-    let blocks_df = if query.include_all_blocks || !blk_set.is_empty() {
+    let blocks = if query.include_all_blocks || !blk_set.is_empty() {
         query_blocks(ctx, query, blk_set)
             .await
             .context("query blocks")?
@@ -188,11 +163,43 @@ async fn execute_query(ctx: &SessionContext, query: &Query) -> Result<QueryResul
         Vec::new()
     };
 
+    let blocks = blocks
+        .into_iter()
+        .filter_map(|batch| project_batch(&batch, &query.field_selection.block).transpose())
+        .collect::<Result<Vec<_>>>()?;
+
     Ok(QueryResultData {
-        logs: logs_df,
-        transactions: transactions_df,
-        blocks: blocks_df,
+        logs,
+        transactions,
+        blocks,
     })
+}
+
+fn project_batch(
+    batch: &RecordBatch,
+    field_selection: &BTreeSet<String>,
+) -> Result<Option<RecordBatch>> {
+    if field_selection.is_empty() {
+        return Ok(None);
+    }
+
+    let indices = batch
+        .schema()
+        .fields
+        .iter()
+        .enumerate()
+        .filter_map(|(idx, field)| {
+            if field_selection.contains(field.name()) {
+                Some(idx)
+            } else {
+                None
+            }
+        })
+        .collect::<Vec<_>>();
+
+    let batch = batch.project(&indices).context("project batch")?;
+
+    Ok(Some(batch))
 }
 
 fn build_select(schema: SchemaRef, field_selection: &BTreeSet<String>) -> Result<Vec<Expr>> {
@@ -206,14 +213,7 @@ fn build_select(schema: SchemaRef, field_selection: &BTreeSet<String>) -> Result
             }
         };
 
-        let expr = match field.data_type() {
-            DataType::Binary | DataType::LargeBinary | DataType::FixedSizeBinary(_) => {
-                encode(col(field.name()), "hex".lit())
-            }
-            _ => col(field.name()),
-        };
-
-        select.push(expr);
+        select.push(col(field.name()));
     }
 
     Ok(select)
@@ -224,8 +224,11 @@ async fn query_blocks(
     query: &Query,
     blk_set: BTreeSet<u64>,
 ) -> Result<DataFrame> {
-    let select = build_select(schema::block_header(), &query.field_selection.block)
-        .context("build select statement")?;
+    let mut field_selection = query.field_selection.block.clone();
+    field_selection.insert("number".to_owned());
+
+    let select =
+        build_select(schema::block_header(), &field_selection).context("build select statement")?;
 
     let mut range_filter = col("number").gt_eq(query.from_block.lit());
     if let Some(to_block) = query.to_block {
@@ -242,10 +245,10 @@ async fn query_blocks(
     ctx.table("blocks")
         .await
         .context("get table")?
-        .filter(filter)
-        .context("filter")?
         .select(select)
-        .context("select columns")
+        .context("select columns")?
+        .filter(filter)
+        .context("filter")
 }
 
 async fn query_transactions(
@@ -253,11 +256,22 @@ async fn query_transactions(
     query: &Query,
     tx_set: BTreeSet<(u64, u64)>,
 ) -> Result<DataFrame> {
-    let mut select = build_select(schema::transaction(), &query.field_selection.transaction)
-        .context("build select statement")?;
+    let mut field_selection = query.field_selection.transaction.clone();
 
-    // add aliases that are used for joining other tables
-    select.push(col("block_number").alias("blk_num"));
+    for name in [
+        "block_number",
+        "transaction_index",
+        "tx_id",
+        "from",
+        "to",
+        "sighash",
+        "status",
+    ] {
+        field_selection.insert(name.to_owned());
+    }
+
+    let select =
+        build_select(schema::transaction(), &field_selection).context("build select statement")?;
 
     let tx_selection = query
         .transactions
@@ -282,10 +296,10 @@ async fn query_transactions(
     ctx.table("transactions")
         .await
         .context("get table")?
-        .filter(filter)
-        .context("filter")?
         .select(select)
-        .context("select columns")
+        .context("select columns")?
+        .filter(filter)
+        .context("filter")
 }
 
 fn tx_selection_to_expr(s: &TransactionSelection) -> Expr {
@@ -314,12 +328,21 @@ fn tx_selection_to_expr(s: &TransactionSelection) -> Expr {
 }
 
 async fn query_logs(ctx: &SessionContext, query: &Query) -> Result<DataFrame> {
-    let mut select = build_select(schema::log(), &query.field_selection.log)
-        .context("build select statement")?;
+    let mut field_selection = query.field_selection.log.clone();
 
-    // add aliases that are used for joining other tables
-    select.push(col("transaction_index").alias("tx_idx"));
-    select.push(col("block_number").alias("blk_num"));
+    for name in [
+        "block_number",
+        "transaction_index",
+        "address",
+        "topic0",
+        "topic1",
+        "topic2",
+        "topic3",
+    ] {
+        field_selection.insert(name.to_owned());
+    }
+
+    let select = build_select(schema::log(), &field_selection).context("build select statement")?;
 
     let log_selection = query.logs.iter().fold(false.lit(), |ex, selection| {
         ex.or(log_selection_to_expr(selection))

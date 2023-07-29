@@ -2537,6 +2537,7 @@ dependencies = [
  "datafusion",
  "env_logger",
  "futures",
+ "hex",
  "itertools 0.11.0",
  "log",
  "mimalloc",

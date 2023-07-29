@@ -27,6 +27,7 @@ axum = "0.6"
 tower = "0.4"
 tower-http = { version = "0.4", features = ["compression-gzip"] }
 serde_json = "1"
+hex = "0.4"
 
 skar-format = { path = "../format" }
 skar-ingest = { path = "../ingest" }
