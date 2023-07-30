@@ -11,6 +11,7 @@ pub struct RpcClientConfig {
 #[derive(Serialize, Deserialize)]
 pub struct EndpointConfig {
     pub url: Url,
+    pub bearer_token: Option<String>,
     pub status_refresh_interval_secs: NonZeroU64,
     #[serde(flatten)]
     pub limit: LimitConfig,

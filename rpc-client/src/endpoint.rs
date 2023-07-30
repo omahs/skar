@@ -25,6 +25,7 @@ impl Endpoint {
     pub fn new(http_client: reqwest::Client, config: EndpointConfig) -> Self {
         let last_block = Arc::new(RwLock::new(None));
         let url = Arc::new(config.url);
+        let bearer_token = Arc::new(config.bearer_token);
 
         tokio::spawn(
             WatchHealth {
@@ -32,6 +33,7 @@ impl Endpoint {
                 last_block: last_block.clone(),
                 status_refresh_interval_secs: config.status_refresh_interval_secs,
                 url: url.clone(),
+                bearer_token: bearer_token.clone(),
             }
             .watch(),
         );
@@ -46,6 +48,7 @@ impl Endpoint {
                 window_num_reqs: 0,
                 last_limit_refresh: Instant::now(),
                 url: url.clone(),
+                bearer_token,
             }
             .listen(),
         );
@@ -102,6 +105,7 @@ impl Endpoint {
 
 struct WatchHealth {
     url: Arc<Url>,
+    bearer_token: Arc<Option<String>>,
     http_client: reqwest::Client,
     last_block: Arc<RwLock<Option<BlockNumber>>>,
     status_refresh_interval_secs: NonZeroU64,
@@ -117,6 +121,7 @@ impl WatchHealth {
             tokio::spawn(
                 SendRpcRequest {
                     url: self.url.clone(),
+                    bearer_token: self.bearer_token.clone(),
                     http_client: self.http_client.clone(),
                     job: Job { res_tx, req },
                 }
@@ -149,6 +154,7 @@ struct Job {
 
 struct Listen {
     url: Arc<Url>,
+    bearer_token: Arc<Option<String>>,
     http_client: reqwest::Client,
     job_rx: mpsc::Receiver<Job>,
     limit_config: LimitConfig,
@@ -171,6 +177,7 @@ impl Listen {
                     http_client: self.http_client.clone(),
                     job,
                     url: self.url.clone(),
+                    bearer_token: self.bearer_token.clone(),
                 }
                 .send(),
             );
@@ -236,6 +243,7 @@ impl Listen {
 
 struct SendRpcRequest {
     url: Arc<Url>,
+    bearer_token: Arc<Option<String>>,
     http_client: reqwest::Client,
     job: Job,
 }
@@ -250,9 +258,15 @@ impl SendRpcRequest {
     async fn send_impl(self) -> Result<RpcResponse> {
         let json: serde_json::Value = self.job.req.as_ref().into();
 
-        let res = self
+        let mut req = self
             .http_client
-            .request(Method::POST, Url::clone(&self.url))
+            .request(Method::POST, Url::clone(&self.url));
+
+        if let Some(bearer_token) = &*self.bearer_token {
+            req = req.bearer_auth(bearer_token);
+        }
+
+        let res = req
             .json(&json)
             .send()
             .await
