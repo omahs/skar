@@ -183,7 +183,7 @@ fn project_batch(
     batch: &RecordBatch,
     field_selection: &BTreeSet<String>,
 ) -> Result<Option<RecordBatch>> {
-    if field_selection.is_empty() {
+    if field_selection.is_empty() || batch.num_rows() == 0 {
         return Ok(None);
     }
 
