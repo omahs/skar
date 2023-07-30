@@ -111,13 +111,11 @@ async fn run_query(
     while let Some(res) = rx.recv().await {
         if put_comma {
             bytes.push(b',');
-        } else {
-            put_comma = true;
         }
 
         let data = res.context("execute parquet query")?;
 
-        extend_bytes_with_data(&mut bytes, &data.data)?;
+        put_comma |= extend_bytes_with_data(&mut bytes, &data.data)?;
 
         next_block = data.next_block;
 
@@ -169,7 +167,12 @@ async fn run_query(
     Ok(response)
 }
 
-fn extend_bytes_with_data(bytes: &mut Vec<u8>, data: &QueryResultData) -> Result<(), AppError> {
+// returns if it wrote any data
+fn extend_bytes_with_data(bytes: &mut Vec<u8>, data: &QueryResultData) -> Result<bool, AppError> {
+    if data.logs.is_empty() && data.transactions.is_empty() && data.blocks.is_empty() {
+        return Ok(false);
+    }
+
     let data = hex_encode_data(data).context("hex encode the data")?;
 
     bytes.push(b'{');
@@ -212,7 +215,7 @@ fn extend_bytes_with_data(bytes: &mut Vec<u8>, data: &QueryResultData) -> Result
 
     bytes.push(b'}');
 
-    Ok(())
+    Ok(true)
 }
 
 // Make our own error that wraps `anyhow::Error`.
