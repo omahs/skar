@@ -64,7 +64,7 @@ async fn get_archive_height(state: &State) -> Result<Option<u64>, AppError> {
     Ok(if db_max == 0 && mem_max == 0 {
         None
     } else {
-        Some(cmp::max(db_max, mem_max))
+        Some(cmp::max(db_max, mem_max) - 1)
     })
 }
 
