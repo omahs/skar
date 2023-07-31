@@ -1,5 +1,5 @@
 use crate::config::InnerConfig;
-use crate::{BatchData, IngestConfig};
+use crate::{validate_batch_data, BatchData, IngestConfig};
 use anyhow::{Context, Error, Result};
 use futures::{stream, StreamExt};
 use skar_format::{Block, Transaction, TransactionReceipt};
@@ -89,6 +89,8 @@ impl Ingester {
         let mut data_stream = stream::iter(futs).buffered(config.concurrency_limit.get());
         while let Some(data) = data_stream.next().await {
             let data = data?;
+
+            validate_batch_data(&data).context("validate data")?;
 
             if self.data_tx.send(data).await.is_err() {
                 log::warn!("no one is listening so quitting ingest loop.");
