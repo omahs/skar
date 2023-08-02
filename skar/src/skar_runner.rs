@@ -4,6 +4,7 @@ use crate::{
     config::{Config, ParquetConfig},
     db::Db,
     schema::data_to_batches,
+    validate_parquet::validate_parquet_folder_data,
     write_parquet::write_folder,
     Args,
 };
@@ -175,12 +176,15 @@ impl Write {
 
                 write_folder(
                     &state,
-                    path,
+                    &path,
                     &self.parquet_config,
                     addr_set.len().try_into().unwrap(),
                 )
                 .await
                 .context("write parquet folder")?;
+
+                validate_parquet_folder_data(&path)
+                    .context("validate parquet folder after writing")?;
 
                 state
                     .db

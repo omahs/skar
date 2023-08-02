@@ -1,4 +1,4 @@
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 use crate::{
     config::{ParquetConfig, TableConfig},
@@ -158,12 +158,12 @@ async fn write_parquet_file(
 
 pub(crate) async fn write_folder(
     state: &State,
-    path: PathBuf,
+    path: &Path,
     cfg: &ParquetConfig,
     addr_ndv: u64,
 ) -> Result<()> {
     let blocks = {
-        let mut path = path.clone();
+        let mut path = path.to_owned();
         path.push("blocks.parquet");
         async move {
             write_parquet_file(
@@ -180,7 +180,7 @@ pub(crate) async fn write_folder(
     };
 
     let transactions = {
-        let mut path = path.clone();
+        let mut path = path.to_owned();
         path.push("transactions.parquet");
         async move {
             write_parquet_file(
@@ -197,7 +197,7 @@ pub(crate) async fn write_folder(
     };
 
     let logs = {
-        let mut path = path.clone();
+        let mut path = path.to_owned();
         path.push("logs.parquet");
         async move {
             write_parquet_file(
