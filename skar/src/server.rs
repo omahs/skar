@@ -115,7 +115,7 @@ async fn run_query(
 
         let data = res.context("execute parquet query")?;
 
-        put_comma |= extend_bytes_with_data(&mut bytes, &data.data)?;
+        put_comma = extend_bytes_with_data(&mut bytes, &data.data)?;
 
         next_block = data.next_block;
 
