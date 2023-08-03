@@ -1,8 +1,7 @@
-use std::{collections::BTreeSet, path::Path, sync::Arc};
+use std::collections::BTreeSet;
 
 use crate::{
     schema::{self, concat_u64},
-    skar_runner::State,
     types::{LogSelection, Query, QueryResultData, TransactionSelection},
 };
 use anyhow::{anyhow, Context, Result};
@@ -12,86 +11,22 @@ use arrow::{
     record_batch::RecordBatch,
 };
 use datafusion::{
-    datasource::MemTable,
     logical_expr::Literal,
-    prelude::{cast, col, DataFrame, Expr, ParquetReadOptions, SessionContext},
+    prelude::{cast, col, DataFrame, Expr},
 };
 use itertools::Itertools;
 
-fn create_ctx_from_state(state: &State) -> Result<SessionContext> {
-    let ctx = SessionContext::new();
+use super::data_provider::DataProvider;
 
-    let blocks: Arc<_> = MemTable::try_new(
-        schema::block_header(),
-        vec![state.in_mem.blocks.data.clone()],
-    )
-    .context("create blocks table")?
-    .into();
-    ctx.register_table("blocks", blocks)
-        .context("register blocks table")?;
-
-    let transactions: Arc<_> = MemTable::try_new(
-        schema::transaction(),
-        vec![state.in_mem.transactions.data.clone()],
-    )
-    .context("create transactions table")?
-    .into();
-    ctx.register_table("transactions", transactions)
-        .context("register transactions table")?;
-
-    let logs: Arc<_> = MemTable::try_new(schema::log(), vec![state.in_mem.logs.data.clone()])
-        .context("create logs table")?
-        .into();
-    ctx.register_table("logs", logs)
-        .context("register logs table")?;
-
-    Ok(ctx)
-}
-
-async fn create_ctx_from_folder(path: &Path) -> Result<SessionContext> {
-    let ctx = SessionContext::new();
-
-    let mut path = path.to_owned();
-
-    for table_name in ["blocks", "transactions", "logs"] {
-        path.push(format!("{table_name}.parquet"));
-        let path_str = path.to_str().context("convert path to str")?;
-        ctx.register_parquet(
-            table_name,
-            path_str,
-            ParquetReadOptions {
-                parquet_pruning: Some(true),
-                ..Default::default()
-            },
-        )
-        .await
-        .context(format!(
-            "register {table_name} parquet into df context. Path was {path_str}"
-        ))?;
-        path.pop();
-    }
-
-    Ok(ctx)
-}
-
-pub(crate) async fn query_mem(state: &State, query: &Query) -> Result<QueryResultData> {
-    let ctx = create_ctx_from_state(state).context("create context")?;
-    execute_query(&ctx, query).await
-}
-
-pub(crate) async fn query_folder(path: &Path, query: &Query) -> Result<QueryResultData> {
-    let ctx = create_ctx_from_folder(path)
-        .await
-        .context("create context")?;
-    execute_query(&ctx, query).await
-}
-
-async fn execute_query(ctx: &SessionContext, query: &Query) -> Result<QueryResultData> {
+pub async fn execute_query(
+    data_provider: &dyn DataProvider,
+    query: &Query,
+) -> Result<QueryResultData> {
     let mut blk_set = BTreeSet::<u64>::new();
     let mut tx_set = BTreeSet::<(u64, u64)>::new();
 
     let logs = if !query.logs.is_empty() {
-        query_logs(ctx, query)
+        query_logs(data_provider, query)
             .await
             .context("query logs")?
             .collect()
@@ -128,7 +63,7 @@ async fn execute_query(ctx: &SessionContext, query: &Query) -> Result<QueryResul
         .collect::<Result<Vec<_>>>()?;
 
     let transactions = if !query.transactions.is_empty() || !tx_set.is_empty() {
-        query_transactions(ctx, query, tx_set)
+        query_transactions(data_provider, query, tx_set)
             .await
             .context("query transactions")?
             .collect()
@@ -157,7 +92,7 @@ async fn execute_query(ctx: &SessionContext, query: &Query) -> Result<QueryResul
         .collect::<Result<Vec<_>>>()?;
 
     let blocks = if query.include_all_blocks || !blk_set.is_empty() {
-        query_blocks(ctx, query, blk_set)
+        query_blocks(data_provider, query, blk_set)
             .await
             .context("query blocks")?
             .collect()
@@ -224,7 +159,7 @@ fn build_select(schema: SchemaRef, field_selection: &BTreeSet<String>) -> Result
 }
 
 async fn query_blocks(
-    ctx: &SessionContext,
+    data_provider: &dyn DataProvider,
     query: &Query,
     blk_set: BTreeSet<u64>,
 ) -> Result<DataFrame> {
@@ -246,7 +181,8 @@ async fn query_blocks(
         .or(col("number").in_list(num_list, false));
     let filter = range_filter.and(list_filter);
 
-    ctx.table("blocks")
+    data_provider
+        .load_blocks()
         .await
         .context("get table")?
         .select(select)
@@ -256,7 +192,7 @@ async fn query_blocks(
 }
 
 async fn query_transactions(
-    ctx: &SessionContext,
+    data_provider: &dyn DataProvider,
     query: &Query,
     tx_set: BTreeSet<(u64, u64)>,
 ) -> Result<DataFrame> {
@@ -297,7 +233,8 @@ async fn query_transactions(
         .and(tx_selection)
         .or(cast(col("tx_id"), DataType::Binary).in_list(id_list, false));
 
-    ctx.table("transactions")
+    data_provider
+        .load_transactions()
         .await
         .context("get table")?
         .select(select)
@@ -331,7 +268,7 @@ fn tx_selection_to_expr(s: &TransactionSelection) -> Expr {
     expr
 }
 
-async fn query_logs(ctx: &SessionContext, query: &Query) -> Result<DataFrame> {
+async fn query_logs(data_provider: &dyn DataProvider, query: &Query) -> Result<DataFrame> {
     let mut field_selection = query.field_selection.log.clone();
 
     for name in [
@@ -357,7 +294,8 @@ async fn query_logs(ctx: &SessionContext, query: &Query) -> Result<DataFrame> {
         range_filter = range_filter.and(col("block_number").lt(to_block.lit()));
     }
 
-    ctx.table("logs")
+    data_provider
+        .load_logs()
         .await
         .context("get table")?
         .filter(range_filter.and(log_selection))

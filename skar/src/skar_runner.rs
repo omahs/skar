@@ -3,14 +3,15 @@ use std::{cmp, collections::BTreeSet, sync::Arc};
 use crate::{
     config::{Config, ParquetConfig},
     db::Db,
-    schema::data_to_batches,
+    query::QueryHandlerPool,
+    schema::{self, data_to_batches},
     validate_parquet::validate_parquet_folder_data,
     write_parquet::write_folder,
     Args,
 };
 use anyhow::{Context, Result};
 use arc_swap::ArcSwap;
-use arrow::{array::FixedSizeBinaryArray, record_batch::RecordBatch};
+use arrow::{array::FixedSizeBinaryArray, compute::concat_batches, record_batch::RecordBatch};
 use sbbf_rs_safe::Filter as Sbbf;
 use skar_ingest::Ingest;
 
@@ -32,9 +33,9 @@ impl State {
 
 #[derive(Clone)]
 pub struct InMemory {
-    pub(crate) blocks: InMemoryTable,
-    pub(crate) transactions: InMemoryTable,
-    pub(crate) logs: InMemoryTable,
+    pub(crate) blocks: RecordBatch,
+    pub(crate) transactions: RecordBatch,
+    pub(crate) logs: RecordBatch,
     pub(crate) from_block: u64,
     pub(crate) to_block: u64,
 }
@@ -44,17 +45,11 @@ impl Default for InMemory {
         Self {
             from_block: u64::MAX,
             to_block: u64::MIN,
-            blocks: Default::default(),
-            transactions: Default::default(),
-            logs: Default::default(),
+            blocks: RecordBatch::new_empty(schema::block_header()),
+            transactions: RecordBatch::new_empty(schema::transaction()),
+            logs: RecordBatch::new_empty(schema::log()),
         }
     }
-}
-
-#[derive(Default, Clone)]
-pub struct InMemoryTable {
-    pub(crate) data: Vec<RecordBatch>,
-    pub(crate) num_rows: usize,
 }
 
 impl SkarRunner {
@@ -68,7 +63,7 @@ impl SkarRunner {
             .await
             .context("create db directory if not exists")?;
 
-        let db = Db::new(&cfg.db.path, &cfg.parquet.path).context("open db")?;
+        let db = Db::new(&cfg.db.path).context("open db")?;
         let db = Arc::new(db);
 
         let db_next_block_num = db
@@ -82,6 +77,12 @@ impl SkarRunner {
 
         let state = ArcSwap::new(State::new(db).into());
         let state = Arc::new(state);
+
+        let handler_pool = Arc::new(QueryHandlerPool::new(
+            cfg.query,
+            &cfg.parquet.path,
+            state.clone(),
+        ));
 
         tokio::spawn({
             let write = Write {
@@ -97,7 +98,7 @@ impl SkarRunner {
             }
         });
 
-        crate::server::run(cfg.http_server, state)
+        crate::server::run(cfg.http_server, handler_pool)
             .await
             .context("run http server")
     }
@@ -106,24 +107,10 @@ impl SkarRunner {
 pub fn build_addr_set(in_mem: &InMemory) -> BTreeSet<Vec<u8>> {
     let mut addrs = BTreeSet::new();
 
-    for batch in in_mem.transactions.data.iter() {
-        for col_name in ["from", "to"] {
-            let col = batch
-                .column_by_name(col_name)
-                .unwrap()
-                .as_any()
-                .downcast_ref::<FixedSizeBinaryArray>()
-                .unwrap();
-
-            for addr in col.iter().flatten() {
-                addrs.insert(addr.to_vec());
-            }
-        }
-    }
-
-    for batch in in_mem.logs.data.iter() {
-        let col = batch
-            .column_by_name("address")
+    for col_name in ["from", "to"] {
+        let col = in_mem
+            .transactions
+            .column_by_name(col_name)
             .unwrap()
             .as_any()
             .downcast_ref::<FixedSizeBinaryArray>()
@@ -132,6 +119,18 @@ pub fn build_addr_set(in_mem: &InMemory) -> BTreeSet<Vec<u8>> {
         for addr in col.iter().flatten() {
             addrs.insert(addr.to_vec());
         }
+    }
+
+    let col = in_mem
+        .logs
+        .column_by_name("address")
+        .unwrap()
+        .as_any()
+        .downcast_ref::<FixedSizeBinaryArray>()
+        .unwrap();
+
+    for addr in col.iter().flatten() {
+        addrs.insert(addr.to_vec());
     }
 
     addrs
@@ -158,10 +157,10 @@ impl Write {
         while let Ok(data) = self.ingest.recv().await {
             let mut state: Arc<State> = self.state.load_full();
 
-            if state.in_mem.blocks.num_rows >= self.parquet_config.blocks.max_file_size
-                || state.in_mem.transactions.num_rows
+            if state.in_mem.blocks.num_rows() >= self.parquet_config.blocks.max_file_size
+                || state.in_mem.transactions.num_rows()
                     >= self.parquet_config.transactions.max_file_size
-                || state.in_mem.logs.num_rows >= self.parquet_config.logs.max_file_size
+                || state.in_mem.logs.num_rows() >= self.parquet_config.logs.max_file_size
             {
                 let to_block = state.in_mem.to_block;
                 let from_block = state.in_mem.from_block;
@@ -200,41 +199,15 @@ impl Write {
 
             let (blocks, transactions, logs) = data_to_batches(data);
 
-            let blocks = InMemoryTable {
-                num_rows: state.in_mem.blocks.num_rows + blocks.num_rows(),
-                data: state
-                    .in_mem
-                    .blocks
-                    .data
-                    .iter()
-                    .cloned()
-                    .chain(std::iter::once(blocks))
-                    .collect(),
-            };
+            let blocks = concat_batches(&blocks.schema(), [&state.in_mem.blocks, &blocks]).unwrap();
 
-            let transactions = InMemoryTable {
-                num_rows: state.in_mem.transactions.num_rows + transactions.num_rows(),
-                data: state
-                    .in_mem
-                    .transactions
-                    .data
-                    .iter()
-                    .cloned()
-                    .chain(std::iter::once(transactions))
-                    .collect(),
-            };
+            let transactions = concat_batches(
+                &transactions.schema(),
+                [&state.in_mem.transactions, &transactions],
+            )
+            .unwrap();
 
-            let logs = InMemoryTable {
-                num_rows: state.in_mem.logs.num_rows + logs.num_rows(),
-                data: state
-                    .in_mem
-                    .logs
-                    .data
-                    .iter()
-                    .cloned()
-                    .chain(std::iter::once(logs))
-                    .collect(),
-            };
+            let logs = concat_batches(&logs.schema(), [&state.in_mem.logs, &logs]).unwrap();
 
             self.state.store(
                 State {

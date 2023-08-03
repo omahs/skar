@@ -51,7 +51,7 @@ pub struct FieldSelection {
 
 #[derive(Default)]
 pub struct QueryResult {
-    pub data: QueryResultData,
+    pub data: Vec<QueryResultData>,
     pub next_block: u64,
 }
 

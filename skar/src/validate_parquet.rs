@@ -134,7 +134,7 @@ fn load_log_data(path: &Path) -> Result<BTreeMap<u64, BTreeMap<u64, LogData>>> {
 
         let log_idx = get_column::<UInt64Array>(&batch, "log_index")?;
         let block_num = get_column::<UInt64Array>(&batch, "block_number")?;
-        let tx_idx = get_column::<UInt64Array>(&batch, "block_number")?;
+        let tx_idx = get_column::<UInt64Array>(&batch, "transaction_index")?;
         let address = get_column::<FixedSizeBinaryArray>(&batch, "address")?;
 
         let topics = (0..4)

@@ -4,7 +4,6 @@ use std::sync::Arc;
 use std::time::Instant;
 
 use anyhow::Context;
-use arc_swap::ArcSwap;
 use arrow::array::BinaryArray;
 use arrow::array::FixedSizeBinaryArray;
 use arrow::array::StringArray;
@@ -23,20 +22,23 @@ use tower::ServiceBuilder;
 use tower_http::compression::CompressionLayer;
 
 use crate::config::HttpServerConfig;
-use crate::query::query_mem;
+use crate::query::QueryHandlerPool;
 use crate::skar_runner::State;
 use crate::types::{Query, QueryResultData};
 
 struct ServerState {
-    state: Arc<ArcSwap<State>>,
     cfg: HttpServerConfig,
+    handler_pool: Arc<QueryHandlerPool>,
 }
 
 const MEGABYTES: usize = 1024 * 1024;
 
-pub(crate) async fn run(cfg: HttpServerConfig, state: Arc<ArcSwap<State>>) -> anyhow::Result<()> {
+pub(crate) async fn run(
+    cfg: HttpServerConfig,
+    handler_pool: Arc<QueryHandlerPool>,
+) -> anyhow::Result<()> {
     let addr = cfg.addr;
-    let state = ServerState { state, cfg };
+    let state = ServerState { cfg, handler_pool };
     let state = Arc::new(state);
 
     let app = axum::Router::new()
@@ -71,7 +73,7 @@ async fn get_archive_height(state: &State) -> Result<Option<u64>, AppError> {
 async fn get_height(
     AxumState(state): AxumState<Arc<ServerState>>,
 ) -> Result<Json<serde_json::Value>, AppError> {
-    let height = get_archive_height(&state.state.load()).await?;
+    let height = get_archive_height(&state.handler_pool.state.load()).await?;
 
     Ok(Json(serde_json::json!({
         "height": height,
@@ -84,21 +86,15 @@ async fn run_query(
 ) -> Result<Response, AppError> {
     let (tx, mut rx) = mpsc::channel(1);
 
-    let data_state = state.state.load();
-
     let query_start = Instant::now();
 
-    tokio::spawn({
-        let db = data_state.db.clone();
-        let query = query.clone();
-        async move {
-            if let Err(e) = db.query(&query, tx).await {
-                log::error!("failed to run query: {:?}", e);
-            }
-        }
-    });
+    state
+        .handler_pool
+        .handle(query, tx)
+        .await
+        .context("start running query")?;
 
-    let height = get_archive_height(&data_state)
+    let height = get_archive_height(&state.handler_pool.state.load())
         .await?
         .map(|h| h.to_string());
 
@@ -107,45 +103,21 @@ async fn run_query(
     let mut next_block = 0;
 
     let mut put_comma = false;
-    let mut hit_limit = false;
     while let Some(res) = rx.recv().await {
-        if put_comma {
-            bytes.push(b',');
+        let query_result = res.context("execute parquet query")?;
+
+        for batch in query_result.data {
+            if put_comma {
+                bytes.push(b',');
+            }
+
+            put_comma = extend_bytes_with_data(&mut bytes, &batch)?;
         }
 
-        let data = res.context("execute parquet query")?;
+        next_block = query_result.next_block;
 
-        put_comma = extend_bytes_with_data(&mut bytes, &data.data)?;
-
-        next_block = data.next_block;
-
-        if bytes.len() >= state.cfg.response_size_limit_mb * MEGABYTES
-            || query_start.elapsed().as_millis() >= state.cfg.response_time_limit_ms.into()
-        {
-            hit_limit = true;
+        if bytes.len() >= state.cfg.response_size_limit_mb * MEGABYTES {
             break;
-        }
-    }
-
-    std::mem::drop(rx);
-
-    if !hit_limit
-        && next_block >= data_state.in_mem.from_block
-        && next_block <= data_state.in_mem.to_block
-    {
-        let in_mem_res = query_mem(&data_state, &query)
-            .await
-            .context("query in memory data")?;
-
-        if put_comma {
-            bytes.push(b',');
-        }
-
-        extend_bytes_with_data(&mut bytes, &in_mem_res)?;
-
-        next_block = data_state.in_mem.to_block;
-        if let Some(to_block) = query.to_block {
-            next_block = next_block.min(to_block);
         }
     }
 

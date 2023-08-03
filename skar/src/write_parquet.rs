@@ -6,7 +6,7 @@ use crate::{
     skar_runner::State,
 };
 use anyhow::{Context, Error, Result};
-use arrow::{compute::concat_batches, datatypes::SchemaRef, record_batch::RecordBatch};
+use arrow::{datatypes::SchemaRef, record_batch::RecordBatch};
 use parquet::{
     arrow::ArrowWriter,
     basic::{Compression, Encoding},
@@ -135,19 +135,17 @@ fn logs_write_properties(cfg: &TableConfig, address_ndv: u64) -> WriterPropertie
 }
 
 async fn write_parquet_file(
-    batches: &[RecordBatch],
+    data: &RecordBatch,
     path: &Path,
     schema: SchemaRef,
     props: WriterProperties,
 ) -> Result<()> {
     tokio::task::block_in_place(|| {
-        let data = concat_batches(&schema, batches).context("concatenate arrow batches")?;
-
         let mut file = std::fs::File::create(path).context("create parquet file for writing")?;
         let mut writer = ArrowWriter::try_new(&mut file, schema, Some(props))
             .context("create parquet writer")?;
         writer
-            .write(&data)
+            .write(data)
             .context("write arrow data to parquet file")?;
 
         writer.close().context("close parquet writer")?;
@@ -167,7 +165,7 @@ pub(crate) async fn write_folder(
         path.push("blocks.parquet");
         async move {
             write_parquet_file(
-                &state.in_mem.blocks.data,
+                &state.in_mem.blocks,
                 &path,
                 schema::block_header(),
                 blocks_write_properties(&cfg.blocks),
@@ -184,7 +182,7 @@ pub(crate) async fn write_folder(
         path.push("transactions.parquet");
         async move {
             write_parquet_file(
-                &state.in_mem.transactions.data,
+                &state.in_mem.transactions,
                 &path,
                 schema::transaction(),
                 transactions_write_properties(&cfg.transactions, addr_ndv, addr_ndv),
@@ -201,7 +199,7 @@ pub(crate) async fn write_folder(
         path.push("logs.parquet");
         async move {
             write_parquet_file(
-                &state.in_mem.logs.data,
+                &state.in_mem.logs,
                 &path,
                 schema::log(),
                 logs_write_properties(&cfg.logs, addr_ndv),

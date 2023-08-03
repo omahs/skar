@@ -9,13 +9,20 @@ pub struct Config {
     pub parquet: ParquetConfig,
     pub db: DbConfig,
     pub http_server: HttpServerConfig,
+    pub query: QueryConfig,
+}
+
+#[derive(Serialize, Deserialize, Clone, Copy)]
+pub struct QueryConfig {
+    pub time_limit_ms: u64,
+    pub parquet_folder_batch_size: usize,
+    pub max_concurrent_queries: usize,
 }
 
 #[derive(Serialize, Deserialize)]
 pub struct HttpServerConfig {
     pub addr: SocketAddr,
     pub response_size_limit_mb: usize,
-    pub response_time_limit_ms: u64,
 }
 
 #[derive(Serialize, Deserialize)]
