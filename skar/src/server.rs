@@ -5,7 +5,6 @@ use std::time::Instant;
 
 use anyhow::Context;
 use arrow::array::BinaryArray;
-use arrow::array::FixedSizeBinaryArray;
 use arrow::array::StringArray;
 use arrow::array::StringBuilder;
 use arrow::datatypes::DataType;
@@ -242,9 +241,6 @@ fn hex_encode_batch(batch: &RecordBatch) -> anyhow::Result<RecordBatch> {
         let col = batch.column(idx);
         let col = match col.data_type() {
             DataType::Binary => Arc::new(hex_encode(col.as_any().downcast_ref().unwrap())),
-            DataType::FixedSizeBinary(_) => {
-                Arc::new(hex_encode_fixed(col.as_any().downcast_ref().unwrap()))
-            }
             _ => col.clone(),
         };
 
@@ -261,16 +257,6 @@ fn hex_encode_batch(batch: &RecordBatch) -> anyhow::Result<RecordBatch> {
 }
 
 fn hex_encode(input: &BinaryArray) -> StringArray {
-    let mut arr = StringBuilder::new();
-
-    for buf in input.iter() {
-        arr.append_option(buf.map(hex::encode));
-    }
-
-    arr.finish()
-}
-
-fn hex_encode_fixed(input: &FixedSizeBinaryArray) -> StringArray {
     let mut arr = StringBuilder::new();
 
     for buf in input.iter() {

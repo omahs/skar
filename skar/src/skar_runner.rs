@@ -11,7 +11,7 @@ use crate::{
 };
 use anyhow::{Context, Result};
 use arc_swap::ArcSwap;
-use arrow::{array::FixedSizeBinaryArray, compute::concat_batches, record_batch::RecordBatch};
+use arrow::{array::BinaryArray, compute::concat_batches, record_batch::RecordBatch};
 use sbbf_rs_safe::Filter as Sbbf;
 use skar_ingest::Ingest;
 
@@ -113,7 +113,7 @@ pub fn build_addr_set(in_mem: &InMemory) -> BTreeSet<Vec<u8>> {
             .column_by_name(col_name)
             .unwrap()
             .as_any()
-            .downcast_ref::<FixedSizeBinaryArray>()
+            .downcast_ref::<BinaryArray>()
             .unwrap();
 
         for addr in col.iter().flatten() {
@@ -126,7 +126,7 @@ pub fn build_addr_set(in_mem: &InMemory) -> BTreeSet<Vec<u8>> {
         .column_by_name("address")
         .unwrap()
         .as_any()
-        .downcast_ref::<FixedSizeBinaryArray>()
+        .downcast_ref::<BinaryArray>()
         .unwrap();
 
     for addr in col.iter().flatten() {

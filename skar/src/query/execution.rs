@@ -5,14 +5,10 @@ use crate::{
     types::{LogSelection, Query, QueryResultData, TransactionSelection},
 };
 use anyhow::{anyhow, Context, Result};
-use arrow::{
-    array::UInt64Array,
-    datatypes::{DataType, SchemaRef},
-    record_batch::RecordBatch,
-};
+use arrow::{array::UInt64Array, datatypes::SchemaRef, record_batch::RecordBatch};
 use datafusion::{
     logical_expr::Literal,
-    prelude::{cast, col, DataFrame, Expr},
+    prelude::{col, DataFrame, Expr},
 };
 use itertools::Itertools;
 
@@ -231,7 +227,7 @@ async fn query_transactions(
         .collect();
     let filter = range_filter
         .and(tx_selection)
-        .or(cast(col("tx_id"), DataType::Binary).in_list(id_list, false));
+        .or(col("tx_id").in_list(id_list, false));
 
     data_provider
         .load_transactions()
@@ -248,17 +244,17 @@ fn tx_selection_to_expr(s: &TransactionSelection) -> Expr {
 
     if !s.from.is_empty() {
         let list = s.from.iter().map(|addr| addr.as_slice().lit()).collect();
-        expr = expr.and(cast(col("from"), DataType::Binary).in_list(list, false));
+        expr = expr.and(col("from").in_list(list, false));
     }
 
     if !s.to.is_empty() {
         let list = s.to.iter().map(|addr| addr.as_slice().lit()).collect();
-        expr = expr.and(cast(col("to"), DataType::Binary).in_list(list, false))
+        expr = expr.and(col("to").in_list(list, false))
     }
 
     if !s.sighash.is_empty() {
         let list = s.sighash.iter().map(|sig| sig.as_slice().lit()).collect();
-        expr = expr.and(cast(col("sighash"), DataType::Binary).in_list(list, false));
+        expr = expr.and(col("sighash").in_list(list, false));
     }
 
     if let Some(status) = s.status {
@@ -309,13 +305,13 @@ fn log_selection_to_expr(s: &LogSelection) -> Expr {
 
     if !s.address.is_empty() {
         let list = s.address.iter().map(|addr| addr.as_slice().lit()).collect();
-        expr = expr.and(cast(col("address"), DataType::Binary).in_list(list, false));
+        expr = expr.and(col("address").in_list(list, false));
     }
 
     for (i, topic) in s.topics.iter().enumerate() {
         let list = topic.iter().map(|t| t.as_slice().lit()).collect();
         let col = col(format!("topic{i}"));
-        expr = expr.and(cast(col, DataType::Binary).in_list(list, false));
+        expr = expr.and(col.in_list(list, false));
     }
 
     expr

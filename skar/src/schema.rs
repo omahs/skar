@@ -5,25 +5,25 @@ use std::sync::Arc;
 use arrow::array::BooleanBuilder;
 use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use arrow::{
-    array::{BinaryBuilder, FixedSizeBinaryBuilder, UInt64Builder, UInt8Builder},
+    array::{BinaryBuilder, UInt64Builder, UInt8Builder},
     record_batch::RecordBatch,
 };
 use skar_ingest::BatchData;
 
 fn hash_dt() -> DataType {
-    DataType::FixedSizeBinary(32)
+    DataType::Binary
 }
 
-fn hash_builder() -> FixedSizeBinaryBuilder {
-    FixedSizeBinaryBuilder::new(32)
+fn hash_builder() -> BinaryBuilder {
+    BinaryBuilder::new()
 }
 
 fn addr_dt() -> DataType {
-    DataType::FixedSizeBinary(20)
+    DataType::Binary
 }
 
-fn addr_builder() -> FixedSizeBinaryBuilder {
-    FixedSizeBinaryBuilder::new(20)
+fn addr_builder() -> BinaryBuilder {
+    BinaryBuilder::new()
 }
 
 fn quantity_dt() -> DataType {
@@ -38,9 +38,9 @@ pub fn block_header() -> SchemaRef {
     Schema::new(vec![
         Field::new("number", DataType::UInt64, false),
         Field::new("hash", hash_dt(), false),
-        Field::new("nonce", DataType::FixedSizeBinary(8), false),
+        Field::new("nonce", DataType::Binary, false),
         Field::new("sha3_uncles", hash_dt(), false),
-        Field::new("logs_bloom", DataType::FixedSizeBinary(256), false),
+        Field::new("logs_bloom", DataType::Binary, false),
         Field::new("transactions_root", hash_dt(), false),
         Field::new("state_root", hash_dt(), false),
         Field::new("receipts_root", hash_dt(), false),
@@ -77,12 +77,12 @@ pub fn transaction() -> SchemaRef {
         Field::new("effective_gas_price", quantity_dt(), false),
         Field::new("gas_used", quantity_dt(), false),
         Field::new("contract_address", addr_dt(), true),
-        Field::new("logs_bloom", DataType::FixedSizeBinary(256), false),
+        Field::new("logs_bloom", DataType::Binary, false),
         Field::new("type", DataType::UInt8, false),
         Field::new("root", hash_dt(), true),
         Field::new("status", DataType::UInt8, true),
-        Field::new("sighash", DataType::FixedSizeBinary(4), true),
-        Field::new("tx_id", DataType::FixedSizeBinary(16), false),
+        Field::new("sighash", DataType::Binary, true),
+        Field::new("tx_id", DataType::Binary, false),
     ])
     .into()
 }
@@ -97,10 +97,10 @@ pub fn log() -> SchemaRef {
         Field::new("block_number", DataType::UInt64, false),
         Field::new("address", addr_dt(), false),
         Field::new("data", DataType::Binary, false),
-        Field::new("topic0", DataType::FixedSizeBinary(32), true),
-        Field::new("topic1", DataType::FixedSizeBinary(32), true),
-        Field::new("topic2", DataType::FixedSizeBinary(32), true),
-        Field::new("topic3", DataType::FixedSizeBinary(32), true),
+        Field::new("topic0", DataType::Binary, true),
+        Field::new("topic1", DataType::Binary, true),
+        Field::new("topic2", DataType::Binary, true),
+        Field::new("topic3", DataType::Binary, true),
     ])
     .into()
 }
@@ -108,9 +108,9 @@ pub fn log() -> SchemaRef {
 pub fn data_to_batches(mut data: BatchData) -> (RecordBatch, RecordBatch, RecordBatch) {
     let mut b_number = UInt64Builder::new();
     let mut b_hash = hash_builder();
-    let mut b_nonce = FixedSizeBinaryBuilder::new(8);
+    let mut b_nonce = BinaryBuilder::new();
     let mut b_sha3_uncles = hash_builder();
-    let mut b_logs_bloom = FixedSizeBinaryBuilder::new(256);
+    let mut b_logs_bloom = BinaryBuilder::new();
     let mut b_transactions_root = hash_builder();
     let mut b_state_root = hash_builder();
     let mut b_receipts_root = hash_builder();
@@ -142,12 +142,12 @@ pub fn data_to_batches(mut data: BatchData) -> (RecordBatch, RecordBatch, Record
     let mut tx_effective_gas_price = quantity_builder();
     let mut tx_gas_used = quantity_builder();
     let mut tx_contract_address = addr_builder();
-    let mut tx_logs_bloom = FixedSizeBinaryBuilder::new(256);
+    let mut tx_logs_bloom = BinaryBuilder::new();
     let mut tx_type = UInt8Builder::new();
     let mut tx_root = hash_builder();
     let mut tx_status = UInt8Builder::new();
-    let mut tx_sighash = FixedSizeBinaryBuilder::new(4);
-    let mut tx_tx_id = FixedSizeBinaryBuilder::new(16);
+    let mut tx_sighash = BinaryBuilder::new();
+    let mut tx_tx_id = BinaryBuilder::new();
 
     let mut log_removed = BooleanBuilder::new();
     let mut log_log_index = UInt64Builder::new();
@@ -157,10 +157,10 @@ pub fn data_to_batches(mut data: BatchData) -> (RecordBatch, RecordBatch, Record
     let mut log_block_number = UInt64Builder::new();
     let mut log_address = addr_builder();
     let mut log_data = BinaryBuilder::new();
-    let mut log_topic0 = FixedSizeBinaryBuilder::new(32);
-    let mut log_topic1 = FixedSizeBinaryBuilder::new(32);
-    let mut log_topic2 = FixedSizeBinaryBuilder::new(32);
-    let mut log_topic3 = FixedSizeBinaryBuilder::new(32);
+    let mut log_topic0 = BinaryBuilder::new();
+    let mut log_topic1 = BinaryBuilder::new();
+    let mut log_topic2 = BinaryBuilder::new();
+    let mut log_topic3 = BinaryBuilder::new();
 
     let mut tx_map = data
         .blocks
@@ -176,16 +176,16 @@ pub fn data_to_batches(mut data: BatchData) -> (RecordBatch, RecordBatch, Record
         let tx = tx_map.remove(receipt.transaction_hash.as_slice()).unwrap();
         assert_eq!(tx.hash, receipt.transaction_hash);
 
-        tx_block_hash.append_value(tx.block_hash.as_ref()).unwrap();
+        tx_block_hash.append_value(tx.block_hash.as_ref());
         tx_block_number.append_value(tx.block_number.into());
-        tx_from.append_value(tx.from.as_ref()).unwrap();
+        tx_from.append_value(tx.from.as_ref());
         tx_gas.append_value(&*tx.gas);
         tx_gas_price.append_value(&*tx.gas_price);
-        tx_hash.append_value(tx.hash.as_ref()).unwrap();
+        tx_hash.append_value(tx.hash.as_ref());
         tx_input.append_value(tx.input.as_ref());
         tx_nonce.append_value(&*tx.nonce);
         match tx.to {
-            Some(to) => tx_to.append_value(to.as_ref()).unwrap(),
+            Some(to) => tx_to.append_value(to.as_ref()),
             None => tx_to.append_null(),
         }
         tx_transaction_index.append_value(tx.transaction_index.into());
@@ -197,15 +197,13 @@ pub fn data_to_batches(mut data: BatchData) -> (RecordBatch, RecordBatch, Record
         tx_effective_gas_price.append_value(&*receipt.effective_gas_price);
         tx_gas_used.append_value(&*receipt.gas_used);
         match receipt.contract_address {
-            Some(addr) => tx_contract_address.append_value(addr.as_ref()).unwrap(),
+            Some(addr) => tx_contract_address.append_value(addr.as_ref()),
             None => tx_contract_address.append_null(),
         }
-        tx_logs_bloom
-            .append_value(receipt.logs_bloom.as_ref())
-            .unwrap();
+        tx_logs_bloom.append_value(receipt.logs_bloom.as_ref());
         tx_type.append_value(receipt.kind.to_u8());
         match receipt.root {
-            Some(root) => tx_root.append_value(root.as_ref()).unwrap(),
+            Some(root) => tx_root.append_value(root.as_ref()),
             None => tx_root.append_null(),
         }
         match receipt.status {
@@ -213,44 +211,38 @@ pub fn data_to_batches(mut data: BatchData) -> (RecordBatch, RecordBatch, Record
             None => tx_status.append_null(),
         }
         if let Some(sighash) = tx.input.get(..4) {
-            tx_sighash.append_value(sighash).unwrap();
+            tx_sighash.append_value(sighash);
         } else {
             tx_sighash.append_null();
         }
-        tx_tx_id
-            .append_value(concat_u64(
-                tx.block_number.into(),
-                tx.transaction_index.into(),
-            ))
-            .unwrap();
+        tx_tx_id.append_value(concat_u64(
+            tx.block_number.into(),
+            tx.transaction_index.into(),
+        ));
 
         for log in receipt.logs.iter() {
             log_removed.append_value(log.removed);
             log_log_index.append_value(log.log_index.into());
             log_transaction_index.append_value(log.transaction_index.into());
-            log_transaction_hash
-                .append_value(log.transaction_hash.as_ref())
-                .unwrap();
-            log_block_hash
-                .append_value(log.block_hash.as_ref())
-                .unwrap();
+            log_transaction_hash.append_value(log.transaction_hash.as_ref());
+            log_block_hash.append_value(log.block_hash.as_ref());
             log_block_number.append_value(log.block_number.into());
-            log_address.append_value(log.address.as_ref()).unwrap();
+            log_address.append_value(log.address.as_ref());
             log_data.append_value(log.data.as_ref());
             match log.topics.get(0) {
-                Some(topic) => log_topic0.append_value(topic.as_ref()).unwrap(),
+                Some(topic) => log_topic0.append_value(topic.as_ref()),
                 None => log_topic0.append_null(),
             }
             match log.topics.get(1) {
-                Some(topic) => log_topic1.append_value(topic.as_ref()).unwrap(),
+                Some(topic) => log_topic1.append_value(topic.as_ref()),
                 None => log_topic1.append_null(),
             }
             match log.topics.get(2) {
-                Some(topic) => log_topic2.append_value(topic.as_ref()).unwrap(),
+                Some(topic) => log_topic2.append_value(topic.as_ref()),
                 None => log_topic2.append_null(),
             }
             match log.topics.get(3) {
-                Some(topic) => log_topic3.append_value(topic.as_ref()).unwrap(),
+                Some(topic) => log_topic3.append_value(topic.as_ref()),
                 None => log_topic3.append_null(),
             }
         }
@@ -260,24 +252,14 @@ pub fn data_to_batches(mut data: BatchData) -> (RecordBatch, RecordBatch, Record
 
     for block in data.blocks.into_iter() {
         b_number.append_value(block.header.number.into());
-        b_hash.append_value(block.header.hash.as_slice()).unwrap();
-        b_nonce.append_value(block.header.nonce.as_slice()).unwrap();
-        b_sha3_uncles
-            .append_value(block.header.sha3_uncles.as_slice())
-            .unwrap();
-        b_logs_bloom
-            .append_value(block.header.logs_bloom.as_slice())
-            .unwrap();
-        b_transactions_root
-            .append_value(block.header.transactions_root.as_slice())
-            .unwrap();
-        b_state_root
-            .append_value(block.header.state_root.as_slice())
-            .unwrap();
-        b_receipts_root
-            .append_value(block.header.receipts_root.as_slice())
-            .unwrap();
-        b_miner.append_value(block.header.miner.as_slice()).unwrap();
+        b_hash.append_value(block.header.hash.as_slice());
+        b_nonce.append_value(block.header.nonce.as_slice());
+        b_sha3_uncles.append_value(block.header.sha3_uncles.as_slice());
+        b_logs_bloom.append_value(block.header.logs_bloom.as_slice());
+        b_transactions_root.append_value(block.header.transactions_root.as_slice());
+        b_state_root.append_value(block.header.state_root.as_slice());
+        b_receipts_root.append_value(block.header.receipts_root.as_slice());
+        b_miner.append_value(block.header.miner.as_slice());
         b_difficulty.append_value(&*block.header.difficulty);
         b_total_difficulty.append_value(&*block.header.total_difficulty);
         b_extra_data.append_value(&*block.header.extra_data);

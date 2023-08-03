@@ -1,5 +1,5 @@
 use anyhow::{anyhow, Context, Result};
-use arrow::array::{Array, FixedSizeBinaryArray, UInt64Array};
+use arrow::array::{Array, BinaryArray, UInt64Array};
 use arrow::record_batch::RecordBatch;
 use ethbloom::{Bloom, Input};
 use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
@@ -108,7 +108,7 @@ fn load_block_data(path: &Path) -> Result<BTreeMap<u64, Vec<u8>>> {
     for batch in reader {
         let batch = batch.context("read batch from parquet")?;
 
-        let logs_bloom = get_column::<FixedSizeBinaryArray>(&batch, "logs_bloom")?;
+        let logs_bloom = get_column::<BinaryArray>(&batch, "logs_bloom")?;
         let block_num = get_column::<UInt64Array>(&batch, "number")?;
 
         for (b, lb) in block_num.iter().zip(logs_bloom.iter()) {
@@ -135,12 +135,12 @@ fn load_log_data(path: &Path) -> Result<BTreeMap<u64, BTreeMap<u64, LogData>>> {
         let log_idx = get_column::<UInt64Array>(&batch, "log_index")?;
         let block_num = get_column::<UInt64Array>(&batch, "block_number")?;
         let tx_idx = get_column::<UInt64Array>(&batch, "transaction_index")?;
-        let address = get_column::<FixedSizeBinaryArray>(&batch, "address")?;
+        let address = get_column::<BinaryArray>(&batch, "address")?;
 
         let topics = (0..4)
             .map(|i| {
                 let col_name = format!("topic{i}");
-                get_column::<FixedSizeBinaryArray>(&batch, &col_name)
+                get_column::<BinaryArray>(&batch, &col_name)
             })
             .collect::<Result<Vec<_>>>()?;
         assert_eq!(topics.len(), 4);
