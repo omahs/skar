@@ -10,33 +10,30 @@ use arrow::{datatypes::SchemaRef, record_batch::RecordBatch};
 use parquet::{
     arrow::ArrowWriter,
     basic::{Compression, Encoding},
-    file::properties::{EnabledStatistics, WriterProperties, WriterVersion},
+    file::properties::{
+        EnabledStatistics, WriterProperties, WriterPropertiesBuilder, WriterVersion,
+    },
     format::SortingColumn,
 };
 
-fn blocks_write_properties(cfg: &TableConfig) -> WriterProperties {
+fn common_write_properties(cfg: &TableConfig) -> WriterPropertiesBuilder {
     WriterProperties::builder()
         .set_writer_version(WriterVersion::PARQUET_2_0)
-        .set_data_page_size_limit(cfg.data_page_size_limit)
         .set_compression(Compression::LZ4_RAW)
+        .set_encoding(Encoding::PLAIN)
+        .set_data_page_size_limit(cfg.data_page_size_limit)
         .set_max_row_group_size(cfg.max_row_group_size)
+}
+
+fn blocks_write_properties(cfg: &TableConfig) -> WriterProperties {
+    common_write_properties(cfg)
         .set_sorting_columns(Some(vec![SortingColumn {
+            // block.number
             column_idx: 0,
             descending: false,
             nulls_first: false,
         }]))
-        .set_bloom_filter_enabled(false)
-        .set_column_statistics_enabled("number".into(), EnabledStatistics::Page)
-        // Encoding
-        .set_column_encoding("number".into(), Encoding::DELTA_BINARY_PACKED)
-        .set_column_encoding("difficulty".into(), Encoding::DELTA_LENGTH_BYTE_ARRAY)
-        .set_column_encoding("total_difficulty".into(), Encoding::DELTA_LENGTH_BYTE_ARRAY)
-        .set_column_encoding("extra_data".into(), Encoding::DELTA_LENGTH_BYTE_ARRAY)
-        .set_column_encoding("size".into(), Encoding::DELTA_LENGTH_BYTE_ARRAY)
-        .set_column_encoding("gas_limit".into(), Encoding::DELTA_LENGTH_BYTE_ARRAY)
-        .set_column_encoding("gas_used".into(), Encoding::DELTA_LENGTH_BYTE_ARRAY)
-        .set_column_encoding("timestamp".into(), Encoding::DELTA_LENGTH_BYTE_ARRAY)
-        .set_column_encoding("uncles".into(), Encoding::DELTA_LENGTH_BYTE_ARRAY)
+        .set_column_statistics_enabled("number".into(), EnabledStatistics::Chunk)
         .build()
 }
 
@@ -45,27 +42,24 @@ fn transactions_write_properties(
     from_ndv: u64,
     to_ndv: u64,
 ) -> WriterProperties {
-    WriterProperties::builder()
-        .set_writer_version(WriterVersion::PARQUET_2_0)
-        .set_data_page_size_limit(cfg.data_page_size_limit)
-        .set_compression(Compression::LZ4_RAW)
-        .set_max_row_group_size(cfg.max_row_group_size)
+    common_write_properties(cfg)
         .set_sorting_columns(Some(vec![
             SortingColumn {
+                // block_number
                 column_idx: 1,
                 descending: false,
                 nulls_first: false,
             },
             SortingColumn {
+                // transaction_index
                 column_idx: 9,
                 descending: false,
                 nulls_first: false,
             },
         ]))
-        .set_bloom_filter_enabled(false)
-        .set_column_statistics_enabled("block_number".into(), EnabledStatistics::Page)
-        .set_column_statistics_enabled("transaction_index".into(), EnabledStatistics::Page)
-        .set_column_statistics_enabled("tx_id".into(), EnabledStatistics::Page)
+        .set_column_statistics_enabled("block_number".into(), EnabledStatistics::Chunk)
+        .set_column_statistics_enabled("transaction_index".into(), EnabledStatistics::Chunk)
+        .set_column_statistics_enabled("tx_id".into(), EnabledStatistics::Chunk)
         // Setup bloom filter
         .set_column_bloom_filter_enabled("from".into(), true)
         .set_column_bloom_filter_fpp("from".into(), 0.01)
@@ -73,64 +67,38 @@ fn transactions_write_properties(
         .set_column_bloom_filter_enabled("to".into(), true)
         .set_column_bloom_filter_fpp("to".into(), 0.01)
         .set_column_bloom_filter_ndv("to".into(), to_ndv)
-        // Encoding
-        .set_column_encoding("block_number".into(), Encoding::RLE)
-        .set_column_encoding("gas".into(), Encoding::DELTA_LENGTH_BYTE_ARRAY)
-        .set_column_encoding("gas_price".into(), Encoding::DELTA_LENGTH_BYTE_ARRAY)
-        .set_column_encoding("input".into(), Encoding::DELTA_LENGTH_BYTE_ARRAY)
-        .set_column_encoding("transaction_index".into(), Encoding::DELTA_BINARY_PACKED)
-        .set_column_encoding("value".into(), Encoding::DELTA_LENGTH_BYTE_ARRAY)
-        .set_column_encoding("v".into(), Encoding::DELTA_LENGTH_BYTE_ARRAY)
-        .set_column_encoding("r".into(), Encoding::DELTA_LENGTH_BYTE_ARRAY)
-        .set_column_encoding("s".into(), Encoding::DELTA_LENGTH_BYTE_ARRAY)
-        .set_column_encoding(
-            "cumulative_gas_used".into(),
-            Encoding::DELTA_LENGTH_BYTE_ARRAY,
-        )
-        .set_column_encoding(
-            "effective_gas_price".into(),
-            Encoding::DELTA_LENGTH_BYTE_ARRAY,
-        )
-        .set_column_encoding("gas_used".into(), Encoding::DELTA_LENGTH_BYTE_ARRAY)
         .build()
 }
 
 fn logs_write_properties(cfg: &TableConfig, address_ndv: u64) -> WriterProperties {
-    WriterProperties::builder()
-        .set_writer_version(WriterVersion::PARQUET_2_0)
-        .set_data_page_size_limit(cfg.data_page_size_limit)
-        .set_compression(Compression::LZ4_RAW)
-        .set_max_row_group_size(cfg.max_row_group_size)
+    common_write_properties(cfg)
         .set_sorting_columns(Some(vec![
+            // block_number
             SortingColumn {
-                column_idx: 5,
+                column_idx: 6,
                 descending: false,
                 nulls_first: false,
             },
+            // transaction_index
             SortingColumn {
                 column_idx: 2,
                 descending: false,
                 nulls_first: false,
             },
+            // log_index
             SortingColumn {
                 column_idx: 1,
                 descending: false,
                 nulls_first: false,
             },
         ]))
-        .set_bloom_filter_enabled(false)
-        .set_column_statistics_enabled("block_number".into(), EnabledStatistics::Page)
-        .set_column_statistics_enabled("log_index".into(), EnabledStatistics::Page)
-        .set_column_statistics_enabled("transaction_index".into(), EnabledStatistics::Page)
+        .set_column_statistics_enabled("block_number".into(), EnabledStatistics::Chunk)
+        .set_column_statistics_enabled("log_index".into(), EnabledStatistics::Chunk)
+        .set_column_statistics_enabled("transaction_index".into(), EnabledStatistics::Chunk)
         // Setup bloom filter
         .set_column_bloom_filter_enabled("address".into(), true)
         .set_column_bloom_filter_fpp("address".into(), 0.01)
         .set_column_bloom_filter_ndv("address".into(), address_ndv)
-        // Encoding
-        .set_column_encoding("log_index".into(), Encoding::DELTA_BINARY_PACKED)
-        .set_column_encoding("transaction_index".into(), Encoding::DELTA_BINARY_PACKED)
-        .set_column_encoding("block_number".into(), Encoding::RLE)
-        .set_column_encoding("data".into(), Encoding::DELTA_LENGTH_BYTE_ARRAY)
         .build()
 }
 
