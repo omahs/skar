@@ -6,7 +6,13 @@ use crate::{
     skar_runner::State,
 };
 use anyhow::{Context, Error, Result};
-use arrow::{datatypes::SchemaRef, record_batch::RecordBatch};
+use arrow::{
+    array::{Array, ArrayRef, UInt32Array},
+    compute,
+    datatypes::SchemaRef,
+    record_batch::RecordBatch,
+    row::{RowConverter, SortField},
+};
 use parquet::{
     arrow::ArrowWriter,
     basic::{Compression, Encoding},
@@ -25,14 +31,38 @@ fn common_write_properties(cfg: &TableConfig) -> WriterPropertiesBuilder {
         .set_max_row_group_size(cfg.max_row_group_size)
 }
 
-fn blocks_write_properties(cfg: &TableConfig) -> WriterProperties {
-    common_write_properties(cfg)
-        .set_sorting_columns(Some(vec![SortingColumn {
-            // block.number
-            column_idx: 0,
+fn indices_to_sorting_columns(indices: &[usize]) -> Vec<SortingColumn> {
+    indices
+        .iter()
+        .map(|column_idx| SortingColumn {
+            column_idx: i32::try_from(*column_idx).unwrap(),
             descending: false,
             nulls_first: false,
-        }]))
+        })
+        .collect()
+}
+
+const BLOCK_SORT_INDICES: &[usize] = &[
+    // block.number
+    0,
+];
+
+const TX_SORT_INDICES: &[usize] = &[
+    // block_number
+    1, // transaction_index
+    9,
+];
+
+const LOG_SORT_INDICES: &[usize] = &[
+    // block_number
+    6, // transaction_index
+    2, // log_index
+    1,
+];
+
+fn blocks_write_properties(cfg: &TableConfig) -> WriterProperties {
+    common_write_properties(cfg)
+        .set_sorting_columns(Some(indices_to_sorting_columns(BLOCK_SORT_INDICES)))
         .set_column_statistics_enabled("number".into(), EnabledStatistics::Chunk)
         .build()
 }
@@ -43,20 +73,7 @@ fn transactions_write_properties(
     to_ndv: u64,
 ) -> WriterProperties {
     common_write_properties(cfg)
-        .set_sorting_columns(Some(vec![
-            SortingColumn {
-                // block_number
-                column_idx: 1,
-                descending: false,
-                nulls_first: false,
-            },
-            SortingColumn {
-                // transaction_index
-                column_idx: 9,
-                descending: false,
-                nulls_first: false,
-            },
-        ]))
+        .set_sorting_columns(Some(indices_to_sorting_columns(TX_SORT_INDICES)))
         .set_column_statistics_enabled("block_number".into(), EnabledStatistics::Chunk)
         .set_column_statistics_enabled("transaction_index".into(), EnabledStatistics::Chunk)
         .set_column_statistics_enabled("tx_id".into(), EnabledStatistics::Chunk)
@@ -72,26 +89,7 @@ fn transactions_write_properties(
 
 fn logs_write_properties(cfg: &TableConfig, address_ndv: u64) -> WriterProperties {
     common_write_properties(cfg)
-        .set_sorting_columns(Some(vec![
-            // block_number
-            SortingColumn {
-                column_idx: 6,
-                descending: false,
-                nulls_first: false,
-            },
-            // transaction_index
-            SortingColumn {
-                column_idx: 2,
-                descending: false,
-                nulls_first: false,
-            },
-            // log_index
-            SortingColumn {
-                column_idx: 1,
-                descending: false,
-                nulls_first: false,
-            },
-        ]))
+        .set_sorting_columns(Some(indices_to_sorting_columns(LOG_SORT_INDICES)))
         .set_column_statistics_enabled("block_number".into(), EnabledStatistics::Chunk)
         .set_column_statistics_enabled("log_index".into(), EnabledStatistics::Chunk)
         .set_column_statistics_enabled("transaction_index".into(), EnabledStatistics::Chunk)
@@ -122,6 +120,34 @@ async fn write_parquet_file(
     })
 }
 
+fn lexsort_to_indices(arrays: &[ArrayRef]) -> UInt32Array {
+    let fields = arrays
+        .iter()
+        .map(|a| SortField::new(a.data_type().clone()))
+        .collect();
+    let mut converter = RowConverter::new(fields).unwrap();
+    let rows = converter.convert_columns(arrays).unwrap();
+    let mut sort: Vec<_> = rows.iter().enumerate().collect();
+    sort.sort_unstable_by(|(_, a), (_, b)| a.cmp(b));
+    UInt32Array::from_iter_values(sort.iter().map(|(i, _)| *i as u32))
+}
+
+fn lexsort(indices: &[usize], batch: &RecordBatch) -> RecordBatch {
+    let cols = indices
+        .iter()
+        .map(|i| batch.column(*i).clone())
+        .collect::<Vec<ArrayRef>>();
+    let indices = lexsort_to_indices(cols.as_slice());
+
+    let cols = batch
+        .columns()
+        .iter()
+        .map(|c| compute::take(c, &indices, None).unwrap())
+        .collect();
+
+    RecordBatch::try_new(batch.schema(), cols).unwrap()
+}
+
 pub(crate) async fn write_folder(
     state: &State,
     path: &Path,
@@ -131,9 +157,10 @@ pub(crate) async fn write_folder(
     let blocks = {
         let mut path = path.to_owned();
         path.push("blocks.parquet");
+
         async move {
             write_parquet_file(
-                &state.in_mem.blocks,
+                &lexsort(BLOCK_SORT_INDICES, &state.in_mem.blocks),
                 &path,
                 schema::block_header(),
                 blocks_write_properties(&cfg.blocks),
@@ -150,7 +177,7 @@ pub(crate) async fn write_folder(
         path.push("transactions.parquet");
         async move {
             write_parquet_file(
-                &state.in_mem.transactions,
+                &lexsort(TX_SORT_INDICES, &state.in_mem.transactions),
                 &path,
                 schema::transaction(),
                 transactions_write_properties(&cfg.transactions, addr_ndv, addr_ndv),
@@ -167,7 +194,7 @@ pub(crate) async fn write_folder(
         path.push("logs.parquet");
         async move {
             write_parquet_file(
-                &state.in_mem.logs,
+                &lexsort(LOG_SORT_INDICES, &state.in_mem.logs),
                 &path,
                 schema::log(),
                 logs_write_properties(&cfg.logs, addr_ndv),
