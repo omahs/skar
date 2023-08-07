@@ -1,43 +1,39 @@
-use std::cmp;
 use std::io::Write;
 use std::sync::Arc;
 use std::time::Instant;
 
 use anyhow::Context;
-use arrow::array::BinaryArray;
-use arrow::array::StringArray;
-use arrow::array::StringBuilder;
-use arrow::datatypes::DataType;
-use arrow::datatypes::Field;
-use arrow::datatypes::Schema;
-use arrow::json::writer::record_batches_to_json_rows;
-use arrow::record_batch::RecordBatch;
+use arrow2::array::BinaryArray;
+use arrow2::array::MutableUtf8Array;
+use arrow2::array::Utf8Array;
+use arrow2::datatypes::DataType;
+use arrow2::datatypes::Field;
+use arrow2::datatypes::Schema;
+use arrow2::io::json::write::RecordSerializer;
 use axum::extract::Json as ReqJson;
 use axum::extract::State as AxumState;
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Json, Response};
-use tokio::sync::mpsc;
 use tower::ServiceBuilder;
 use tower_http::compression::CompressionLayer;
 
 use crate::config::HttpServerConfig;
-use crate::query::QueryHandlerPool;
-use crate::skar_runner::State;
+use crate::query::ArrowBatch;
+use crate::query::Handler;
+use crate::state::ArrowChunk;
 use crate::types::{Query, QueryResultData};
+use crate::write_parquet::concat_chunks;
 
 struct ServerState {
     cfg: HttpServerConfig,
-    handler_pool: Arc<QueryHandlerPool>,
+    handler: Arc<Handler>,
 }
 
 const MEGABYTES: usize = 1024 * 1024;
 
-pub(crate) async fn run(
-    cfg: HttpServerConfig,
-    handler_pool: Arc<QueryHandlerPool>,
-) -> anyhow::Result<()> {
+pub(crate) async fn run(cfg: HttpServerConfig, handler: Arc<Handler>) -> anyhow::Result<()> {
     let addr = cfg.addr;
-    let state = ServerState { cfg, handler_pool };
+    let state = ServerState { cfg, handler };
     let state = Arc::new(state);
 
     let app = axum::Router::new()
@@ -53,26 +49,14 @@ pub(crate) async fn run(
         .context("run http server")
 }
 
-async fn get_archive_height(state: &State) -> Result<Option<u64>, AppError> {
-    let db_max = state
-        .db
-        .get_next_block_num()
-        .await
-        .context("get next block num from db")
-        .map_err(AppError::from)?;
-    let mem_max = state.in_mem.to_block;
-
-    Ok(if db_max == 0 && mem_max == 0 {
-        None
-    } else {
-        Some(cmp::max(db_max, mem_max) - 1)
-    })
-}
-
 async fn get_height(
     AxumState(state): AxumState<Arc<ServerState>>,
 ) -> Result<Json<serde_json::Value>, AppError> {
-    let height = get_archive_height(&state.handler_pool.state.load()).await?;
+    let height = state
+        .handler
+        .archive_height()
+        .await
+        .context("get archive height")?;
 
     Ok(Json(serde_json::json!({
         "height": height,
@@ -83,19 +67,19 @@ async fn run_query(
     AxumState(state): AxumState<Arc<ServerState>>,
     ReqJson(query): ReqJson<Query>,
 ) -> Result<Response, AppError> {
-    let (tx, mut rx) = mpsc::channel(1);
-
     let query_start = Instant::now();
 
-    state
-        .handler_pool
-        .handle(query, tx)
-        .await
+    let mut rx = state
+        .handler
+        .clone()
+        .handle(query)
         .context("start running query")?;
 
-    let height = get_archive_height(&state.handler_pool.state.load())
-        .await?
-        .map(|h| h.to_string());
+    let height = state
+        .handler
+        .archive_height()
+        .await
+        .context("get archive height")?;
 
     let mut bytes = br#"{"data":["#.to_vec();
 
@@ -105,13 +89,11 @@ async fn run_query(
     while let Some(res) = rx.recv().await {
         let query_result = res.context("execute parquet query")?;
 
-        for batch in query_result.data {
-            if put_comma {
-                bytes.push(b',');
-            }
-
-            put_comma = extend_bytes_with_data(&mut bytes, &batch)?;
+        if put_comma {
+            bytes.push(b',');
         }
+
+        put_comma = extend_bytes_with_data(&mut bytes, &query_result.data)?;
 
         next_block = query_result.next_block;
 
@@ -123,7 +105,7 @@ async fn run_query(
     write!(
         &mut bytes,
         r#"],"archiveHeight":{},"nextBlock":{},"totalTime":{}}}"#,
-        height.as_deref().unwrap_or("null"),
+        height.map(|n| n.to_string()).unwrap_or("null".to_owned()),
         next_block,
         query_start.elapsed().as_millis(),
     )
@@ -154,9 +136,8 @@ fn extend_bytes_with_data(bytes: &mut Vec<u8>, data: &QueryResultData) -> Result
 
         bytes.extend_from_slice(br#""logs":"#);
         let json_rows =
-            record_batches_to_json_rows(data.logs.iter().collect::<Vec<_>>().as_slice())
-                .context("serialize arrow into json")?;
-        bytes.extend_from_slice(&serde_json::to_vec(&json_rows).unwrap());
+            record_batches_to_json_rows(&data.logs).context("serialize arrow into json")?;
+        bytes.extend_from_slice(&json_rows);
     }
 
     if !data.transactions.is_empty() {
@@ -167,9 +148,8 @@ fn extend_bytes_with_data(bytes: &mut Vec<u8>, data: &QueryResultData) -> Result
 
         bytes.extend_from_slice(br#""transactions":"#);
         let json_rows =
-            record_batches_to_json_rows(data.transactions.iter().collect::<Vec<_>>().as_slice())
-                .context("serialize arrow into json")?;
-        bytes.extend_from_slice(&serde_json::to_vec(&json_rows).unwrap());
+            record_batches_to_json_rows(&data.transactions).context("serialize arrow into json")?;
+        bytes.extend_from_slice(&json_rows);
     }
 
     if !data.blocks.is_empty() {
@@ -179,14 +159,31 @@ fn extend_bytes_with_data(bytes: &mut Vec<u8>, data: &QueryResultData) -> Result
 
         bytes.extend_from_slice(br#""blocks":"#);
         let json_rows =
-            record_batches_to_json_rows(data.blocks.iter().collect::<Vec<_>>().as_slice())
-                .context("serialize arrow into json")?;
-        bytes.extend_from_slice(&serde_json::to_vec(&json_rows).unwrap());
+            record_batches_to_json_rows(&data.blocks).context("serialize arrow into json")?;
+        bytes.extend_from_slice(&json_rows);
     }
 
     bytes.push(b'}');
 
     Ok(true)
+}
+
+fn record_batches_to_json_rows(batches: &[ArrowBatch]) -> anyhow::Result<Vec<u8>> {
+    if batches.is_empty() {
+        return Ok(b"[]".to_vec());
+    }
+
+    let schema = Schema::clone(&batches[0].schema);
+
+    let chunks = batches.iter().map(|b| b.chunk.clone()).collect::<Vec<_>>();
+    let chunk = concat_chunks(&chunks).context("concat chunks")?;
+
+    let serializer = RecordSerializer::new(schema, &chunk, Vec::new());
+
+    let mut out = Vec::new();
+    arrow2::io::json::write::write(&mut out, serializer).context("write to json")?;
+
+    Ok(out)
 }
 
 // Make our own error that wraps `anyhow::Error`.
@@ -215,7 +212,7 @@ where
 }
 
 fn hex_encode_data(res: &QueryResultData) -> anyhow::Result<QueryResultData> {
-    let encode_batches = |batches: &[RecordBatch]| {
+    let encode_batches = |batches: &[ArrowBatch]| {
         batches
             .iter()
             .map(hex_encode_batch)
@@ -233,35 +230,38 @@ fn hex_encode_data(res: &QueryResultData) -> anyhow::Result<QueryResultData> {
     })
 }
 
-fn hex_encode_batch(batch: &RecordBatch) -> anyhow::Result<RecordBatch> {
+fn hex_encode_batch(batch: &ArrowBatch) -> anyhow::Result<ArrowBatch> {
     let mut fields = Vec::new();
     let mut cols = Vec::new();
 
-    for (idx, field) in batch.schema().fields().iter().enumerate() {
-        let col = batch.column(idx);
+    for (idx, field) in batch.schema.fields.iter().enumerate() {
+        let col = batch.chunk.columns().get(idx).context("get column")?;
         let col = match col.data_type() {
-            DataType::Binary => Arc::new(hex_encode(col.as_any().downcast_ref().unwrap())),
+            DataType::Binary => Box::new(hex_encode(col.as_any().downcast_ref().unwrap())),
             _ => col.clone(),
         };
 
         let field = field.clone();
         fields.push(Field::new(
-            field.name(),
+            field.name,
             col.data_type().clone(),
-            field.is_nullable(),
+            field.is_nullable,
         ));
         cols.push(col);
     }
 
-    RecordBatch::try_new(Arc::new(Schema::new(fields)), cols).context("build record batch")
+    Ok(ArrowBatch {
+        chunk: ArrowChunk::new(cols).into(),
+        schema: Schema::from(fields).into(),
+    })
 }
 
-fn hex_encode(input: &BinaryArray) -> StringArray {
-    let mut arr = StringBuilder::new();
+fn hex_encode(input: &BinaryArray<i32>) -> Utf8Array<i32> {
+    let mut arr = MutableUtf8Array::new();
 
     for buf in input.iter() {
-        arr.append_option(buf.map(hex::encode));
+        arr.push(buf.map(hex::encode));
     }
 
-    arr.finish()
+    arr.into()
 }

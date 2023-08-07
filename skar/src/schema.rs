@@ -1,41 +1,39 @@
 use std::collections::BTreeMap;
 use std::mem;
-use std::sync::Arc;
 
-use arrow::array::BooleanBuilder;
-use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
-use arrow::{
-    array::{BinaryBuilder, UInt64Builder, UInt8Builder},
-    record_batch::RecordBatch,
-};
+use arrow2::array::{MutableArray, MutableBinaryArray, MutableBooleanArray, UInt64Vec, UInt8Vec};
+use arrow2::datatypes::{DataType, Field, Schema, SchemaRef};
+
 use skar_ingest::BatchData;
+
+use crate::state::ArrowChunk;
 
 fn hash_dt() -> DataType {
     DataType::Binary
 }
 
-fn hash_builder() -> BinaryBuilder {
-    BinaryBuilder::new()
+fn hash_builder() -> MutableBinaryArray<i32> {
+    MutableBinaryArray::new()
 }
 
 fn addr_dt() -> DataType {
     DataType::Binary
 }
 
-fn addr_builder() -> BinaryBuilder {
-    BinaryBuilder::new()
+fn addr_builder() -> MutableBinaryArray<i32> {
+    MutableBinaryArray::new()
 }
 
 fn quantity_dt() -> DataType {
     DataType::Binary
 }
 
-fn quantity_builder() -> BinaryBuilder {
-    BinaryBuilder::new()
+fn quantity_builder() -> MutableBinaryArray<i32> {
+    MutableBinaryArray::new()
 }
 
 pub fn block_header() -> SchemaRef {
-    Schema::new(vec![
+    Schema::from(vec![
         Field::new("number", DataType::UInt64, false),
         Field::new("hash", hash_dt(), false),
         Field::new("nonce", DataType::Binary, false),
@@ -58,7 +56,7 @@ pub fn block_header() -> SchemaRef {
 }
 
 pub fn transaction() -> SchemaRef {
-    Schema::new(vec![
+    Schema::from(vec![
         Field::new("block_hash", hash_dt(), false),
         Field::new("block_number", DataType::UInt64, false),
         Field::new("from", addr_dt(), false),
@@ -82,13 +80,12 @@ pub fn transaction() -> SchemaRef {
         Field::new("root", hash_dt(), true),
         Field::new("status", DataType::UInt8, true),
         Field::new("sighash", DataType::Binary, true),
-        Field::new("tx_id", DataType::Binary, false),
     ])
     .into()
 }
 
 pub fn log() -> SchemaRef {
-    Schema::new(vec![
+    Schema::from(vec![
         Field::new("removed", DataType::Boolean, false),
         Field::new("log_index", DataType::UInt64, false),
         Field::new("transaction_index", DataType::UInt64, false),
@@ -105,35 +102,41 @@ pub fn log() -> SchemaRef {
     .into()
 }
 
-pub fn data_to_batches(mut data: BatchData) -> (RecordBatch, RecordBatch, RecordBatch) {
-    let mut b_number = UInt64Builder::new();
+pub struct Batches {
+    pub blocks: ArrowChunk,
+    pub transactions: ArrowChunk,
+    pub logs: ArrowChunk,
+}
+
+pub fn data_to_batches(mut data: BatchData) -> Batches {
+    let mut b_number = UInt64Vec::new();
     let mut b_hash = hash_builder();
-    let mut b_nonce = BinaryBuilder::new();
+    let mut b_nonce = MutableBinaryArray::<i32>::new();
     let mut b_sha3_uncles = hash_builder();
-    let mut b_logs_bloom = BinaryBuilder::new();
+    let mut b_logs_bloom = MutableBinaryArray::<i32>::new();
     let mut b_transactions_root = hash_builder();
     let mut b_state_root = hash_builder();
     let mut b_receipts_root = hash_builder();
     let mut b_miner = addr_builder();
     let mut b_difficulty = quantity_builder();
     let mut b_total_difficulty = quantity_builder();
-    let mut b_extra_data = BinaryBuilder::new();
+    let mut b_extra_data = MutableBinaryArray::<i32>::new();
     let mut b_size = quantity_builder();
     let mut b_gas_limit = quantity_builder();
     let mut b_gas_used = quantity_builder();
     let mut b_timestamp = quantity_builder();
-    let mut b_uncles = BinaryBuilder::new();
+    let mut b_uncles = MutableBinaryArray::<i32>::new();
 
     let mut tx_block_hash = hash_builder();
-    let mut tx_block_number = UInt64Builder::new();
+    let mut tx_block_number = UInt64Vec::new();
     let mut tx_from = addr_builder();
-    let mut tx_gas = BinaryBuilder::new();
-    let mut tx_gas_price = BinaryBuilder::new();
+    let mut tx_gas = MutableBinaryArray::<i32>::new();
+    let mut tx_gas_price = MutableBinaryArray::<i32>::new();
     let mut tx_hash = hash_builder();
-    let mut tx_input = BinaryBuilder::new();
-    let mut tx_nonce = BinaryBuilder::new();
+    let mut tx_input = MutableBinaryArray::<i32>::new();
+    let mut tx_nonce = MutableBinaryArray::<i32>::new();
     let mut tx_to = addr_builder();
-    let mut tx_transaction_index = UInt64Builder::new();
+    let mut tx_transaction_index = UInt64Vec::new();
     let mut tx_value = quantity_builder();
     let mut tx_v = quantity_builder();
     let mut tx_r = quantity_builder();
@@ -142,25 +145,24 @@ pub fn data_to_batches(mut data: BatchData) -> (RecordBatch, RecordBatch, Record
     let mut tx_effective_gas_price = quantity_builder();
     let mut tx_gas_used = quantity_builder();
     let mut tx_contract_address = addr_builder();
-    let mut tx_logs_bloom = BinaryBuilder::new();
-    let mut tx_type = UInt8Builder::new();
+    let mut tx_logs_bloom = MutableBinaryArray::<i32>::new();
+    let mut tx_type = UInt8Vec::new();
     let mut tx_root = hash_builder();
-    let mut tx_status = UInt8Builder::new();
-    let mut tx_sighash = BinaryBuilder::new();
-    let mut tx_tx_id = BinaryBuilder::new();
+    let mut tx_status = UInt8Vec::new();
+    let mut tx_sighash = MutableBinaryArray::<i32>::new();
 
-    let mut log_removed = BooleanBuilder::new();
-    let mut log_log_index = UInt64Builder::new();
-    let mut log_transaction_index = UInt64Builder::new();
+    let mut log_removed = MutableBooleanArray::new();
+    let mut log_log_index = UInt64Vec::new();
+    let mut log_transaction_index = UInt64Vec::new();
     let mut log_transaction_hash = hash_builder();
     let mut log_block_hash = hash_builder();
-    let mut log_block_number = UInt64Builder::new();
+    let mut log_block_number = UInt64Vec::new();
     let mut log_address = addr_builder();
-    let mut log_data = BinaryBuilder::new();
-    let mut log_topic0 = BinaryBuilder::new();
-    let mut log_topic1 = BinaryBuilder::new();
-    let mut log_topic2 = BinaryBuilder::new();
-    let mut log_topic3 = BinaryBuilder::new();
+    let mut log_data = MutableBinaryArray::<i32>::new();
+    let mut log_topic0 = MutableBinaryArray::<i32>::new();
+    let mut log_topic1 = MutableBinaryArray::<i32>::new();
+    let mut log_topic2 = MutableBinaryArray::<i32>::new();
+    let mut log_topic3 = MutableBinaryArray::<i32>::new();
 
     let mut tx_map = data
         .blocks
@@ -176,185 +178,141 @@ pub fn data_to_batches(mut data: BatchData) -> (RecordBatch, RecordBatch, Record
         let tx = tx_map.remove(receipt.transaction_hash.as_slice()).unwrap();
         assert_eq!(tx.hash, receipt.transaction_hash);
 
-        tx_block_hash.append_value(tx.block_hash.as_ref());
-        tx_block_number.append_value(tx.block_number.into());
-        tx_from.append_value(tx.from.as_ref());
-        tx_gas.append_value(&*tx.gas);
-        tx_gas_price.append_value(&*tx.gas_price);
-        tx_hash.append_value(tx.hash.as_ref());
-        tx_input.append_value(tx.input.as_ref());
-        tx_nonce.append_value(&*tx.nonce);
-        match tx.to {
-            Some(to) => tx_to.append_value(to.as_ref()),
-            None => tx_to.append_null(),
-        }
-        tx_transaction_index.append_value(tx.transaction_index.into());
-        tx_value.append_value(tx.value.as_ref());
-        tx_v.append_value(&*tx.v);
-        tx_r.append_value(&*tx.r);
-        tx_s.append_value(&*tx.s);
-        tx_cumulative_gas_used.append_value(&*receipt.cumulative_gas_used);
-        tx_effective_gas_price.append_value(&*receipt.effective_gas_price);
-        tx_gas_used.append_value(&*receipt.gas_used);
-        match receipt.contract_address {
-            Some(addr) => tx_contract_address.append_value(addr.as_ref()),
-            None => tx_contract_address.append_null(),
-        }
-        tx_logs_bloom.append_value(receipt.logs_bloom.as_ref());
-        tx_type.append_value(receipt.kind.to_u8());
-        match receipt.root {
-            Some(root) => tx_root.append_value(root.as_ref()),
-            None => tx_root.append_null(),
-        }
-        match receipt.status {
-            Some(status) => tx_status.append_value(status.to_u8()),
-            None => tx_status.append_null(),
-        }
-        if let Some(sighash) = tx.input.get(..4) {
-            tx_sighash.append_value(sighash);
-        } else {
-            tx_sighash.append_null();
-        }
-        tx_tx_id.append_value(concat_u64(
-            tx.block_number.into(),
-            tx.transaction_index.into(),
-        ));
+        tx_block_hash.push(Some(tx.block_hash.as_ref()));
+        tx_block_number.push(Some(tx.block_number.into()));
+        tx_from.push(Some(tx.from.as_ref()));
+        tx_gas.push(Some(&*tx.gas));
+        tx_gas_price.push(Some(&*tx.gas_price));
+        tx_hash.push(Some(tx.hash.as_ref()));
+        tx_input.push(Some(tx.input.as_ref()));
+        tx_nonce.push(Some(&*tx.nonce));
+        tx_to.push(tx.to.as_ref().map(|s| s.as_slice()));
+        tx_transaction_index.push(Some(tx.transaction_index.into()));
+        tx_value.push(Some(tx.value.as_ref()));
+        tx_v.push(Some(&*tx.v));
+        tx_r.push(Some(&*tx.r));
+        tx_s.push(Some(&*tx.s));
+        tx_cumulative_gas_used.push(Some(&*receipt.cumulative_gas_used));
+        tx_effective_gas_price.push(Some(&*receipt.effective_gas_price));
+        tx_gas_used.push(Some(&*receipt.gas_used));
+        tx_contract_address.push(receipt.contract_address.as_ref().map(|s| s.as_slice()));
+        tx_logs_bloom.push(Some(receipt.logs_bloom.as_ref()));
+        tx_type.push(Some(receipt.kind.to_u8()));
+        tx_root.push(receipt.root.as_ref().map(|s| s.as_slice()));
+        tx_status.push(receipt.status.map(|s| s.to_u8()));
+        tx_sighash.push(tx.input.get(0..4));
 
         for log in receipt.logs.iter() {
-            log_removed.append_value(log.removed);
-            log_log_index.append_value(log.log_index.into());
-            log_transaction_index.append_value(log.transaction_index.into());
-            log_transaction_hash.append_value(log.transaction_hash.as_ref());
-            log_block_hash.append_value(log.block_hash.as_ref());
-            log_block_number.append_value(log.block_number.into());
-            log_address.append_value(log.address.as_ref());
-            log_data.append_value(log.data.as_ref());
-            match log.topics.get(0) {
-                Some(topic) => log_topic0.append_value(topic.as_ref()),
-                None => log_topic0.append_null(),
-            }
-            match log.topics.get(1) {
-                Some(topic) => log_topic1.append_value(topic.as_ref()),
-                None => log_topic1.append_null(),
-            }
-            match log.topics.get(2) {
-                Some(topic) => log_topic2.append_value(topic.as_ref()),
-                None => log_topic2.append_null(),
-            }
-            match log.topics.get(3) {
-                Some(topic) => log_topic3.append_value(topic.as_ref()),
-                None => log_topic3.append_null(),
-            }
+            log_removed.push(Some(log.removed));
+            log_log_index.push(Some(log.log_index.into()));
+            log_transaction_index.push(Some(log.transaction_index.into()));
+            log_transaction_hash.push(Some(log.transaction_hash.as_ref()));
+            log_block_hash.push(Some(log.block_hash.as_ref()));
+            log_block_number.push(Some(log.block_number.into()));
+            log_address.push(Some(log.address.as_ref()));
+            log_data.push(Some(log.data.as_ref()));
+            log_topic0.push(log.topics.get(0).map(|s| s.as_slice()));
+            log_topic1.push(log.topics.get(1).map(|s| s.as_slice()));
+            log_topic2.push(log.topics.get(2).map(|s| s.as_slice()));
+            log_topic3.push(log.topics.get(3).map(|s| s.as_slice()));
         }
     }
 
     assert!(tx_map.is_empty());
 
     for block in data.blocks.into_iter() {
-        b_number.append_value(block.header.number.into());
-        b_hash.append_value(block.header.hash.as_slice());
-        b_nonce.append_value(block.header.nonce.as_slice());
-        b_sha3_uncles.append_value(block.header.sha3_uncles.as_slice());
-        b_logs_bloom.append_value(block.header.logs_bloom.as_slice());
-        b_transactions_root.append_value(block.header.transactions_root.as_slice());
-        b_state_root.append_value(block.header.state_root.as_slice());
-        b_receipts_root.append_value(block.header.receipts_root.as_slice());
-        b_miner.append_value(block.header.miner.as_slice());
-        b_difficulty.append_value(&*block.header.difficulty);
-        b_total_difficulty.append_value(&*block.header.total_difficulty);
-        b_extra_data.append_value(&*block.header.extra_data);
-        b_size.append_value(&*block.header.size);
-        b_gas_limit.append_value(&*block.header.gas_limit);
-        b_gas_used.append_value(&*block.header.gas_used);
-        b_timestamp.append_value(&*block.header.timestamp);
-        b_uncles.append_value(block.header.uncles.iter().fold(Vec::new(), |mut v, b| {
-            v.extend_from_slice(b.as_slice());
-            v
-        }));
+        b_number.push(Some(block.header.number.into()));
+        b_hash.push(Some(block.header.hash.as_slice()));
+        b_nonce.push(Some(block.header.nonce.as_slice()));
+        b_sha3_uncles.push(Some(block.header.sha3_uncles.as_slice()));
+        b_logs_bloom.push(Some(block.header.logs_bloom.as_slice()));
+        b_transactions_root.push(Some(block.header.transactions_root.as_slice()));
+        b_state_root.push(Some(block.header.state_root.as_slice()));
+        b_receipts_root.push(Some(block.header.receipts_root.as_slice()));
+        b_miner.push(Some(block.header.miner.as_slice()));
+        b_difficulty.push(Some(&*block.header.difficulty));
+        b_total_difficulty.push(Some(&*block.header.total_difficulty));
+        b_extra_data.push(Some(&*block.header.extra_data));
+        b_size.push(Some(&*block.header.size));
+        b_gas_limit.push(Some(&*block.header.gas_limit));
+        b_gas_used.push(Some(&*block.header.gas_used));
+        b_timestamp.push(Some(&*block.header.timestamp));
+        b_uncles.push(Some(block.header.uncles.iter().fold(
+            Vec::new(),
+            |mut v, b| {
+                v.extend_from_slice(b.as_slice());
+                v
+            },
+        )));
     }
 
-    let blocks = RecordBatch::try_new(
-        block_header(),
-        vec![
-            Arc::new(b_number.finish()),
-            Arc::new(b_hash.finish()),
-            Arc::new(b_nonce.finish()),
-            Arc::new(b_sha3_uncles.finish()),
-            Arc::new(b_logs_bloom.finish()),
-            Arc::new(b_transactions_root.finish()),
-            Arc::new(b_state_root.finish()),
-            Arc::new(b_receipts_root.finish()),
-            Arc::new(b_miner.finish()),
-            Arc::new(b_difficulty.finish()),
-            Arc::new(b_total_difficulty.finish()),
-            Arc::new(b_extra_data.finish()),
-            Arc::new(b_size.finish()),
-            Arc::new(b_gas_limit.finish()),
-            Arc::new(b_gas_used.finish()),
-            Arc::new(b_timestamp.finish()),
-            Arc::new(b_uncles.finish()),
-        ],
-    )
+    let blocks = ArrowChunk::try_new(vec![
+        b_number.as_box(),
+        b_hash.as_box(),
+        b_nonce.as_box(),
+        b_sha3_uncles.as_box(),
+        b_logs_bloom.as_box(),
+        b_transactions_root.as_box(),
+        b_state_root.as_box(),
+        b_receipts_root.as_box(),
+        b_miner.as_box(),
+        b_difficulty.as_box(),
+        b_total_difficulty.as_box(),
+        b_extra_data.as_box(),
+        b_size.as_box(),
+        b_gas_limit.as_box(),
+        b_gas_used.as_box(),
+        b_timestamp.as_box(),
+        b_uncles.as_box(),
+    ])
     .unwrap();
 
-    let transactions = RecordBatch::try_new(
-        transaction(),
-        vec![
-            Arc::new(tx_block_hash.finish()),
-            Arc::new(tx_block_number.finish()),
-            Arc::new(tx_from.finish()),
-            Arc::new(tx_gas.finish()),
-            Arc::new(tx_gas_price.finish()),
-            Arc::new(tx_hash.finish()),
-            Arc::new(tx_input.finish()),
-            Arc::new(tx_nonce.finish()),
-            Arc::new(tx_to.finish()),
-            Arc::new(tx_transaction_index.finish()),
-            Arc::new(tx_value.finish()),
-            Arc::new(tx_v.finish()),
-            Arc::new(tx_r.finish()),
-            Arc::new(tx_s.finish()),
-            Arc::new(tx_cumulative_gas_used.finish()),
-            Arc::new(tx_effective_gas_price.finish()),
-            Arc::new(tx_gas_used.finish()),
-            Arc::new(tx_contract_address.finish()),
-            Arc::new(tx_logs_bloom.finish()),
-            Arc::new(tx_type.finish()),
-            Arc::new(tx_root.finish()),
-            Arc::new(tx_status.finish()),
-            Arc::new(tx_sighash.finish()),
-            Arc::new(tx_tx_id.finish()),
-        ],
-    )
+    let transactions = ArrowChunk::try_new(vec![
+        tx_block_hash.as_box(),
+        tx_block_number.as_box(),
+        tx_from.as_box(),
+        tx_gas.as_box(),
+        tx_gas_price.as_box(),
+        tx_hash.as_box(),
+        tx_input.as_box(),
+        tx_nonce.as_box(),
+        tx_to.as_box(),
+        tx_transaction_index.as_box(),
+        tx_value.as_box(),
+        tx_v.as_box(),
+        tx_r.as_box(),
+        tx_s.as_box(),
+        tx_cumulative_gas_used.as_box(),
+        tx_effective_gas_price.as_box(),
+        tx_gas_used.as_box(),
+        tx_contract_address.as_box(),
+        tx_logs_bloom.as_box(),
+        tx_type.as_box(),
+        tx_root.as_box(),
+        tx_status.as_box(),
+        tx_sighash.as_box(),
+    ])
     .unwrap();
 
-    let logs = RecordBatch::try_new(
-        log(),
-        vec![
-            Arc::new(log_removed.finish()),
-            Arc::new(log_log_index.finish()),
-            Arc::new(log_transaction_index.finish()),
-            Arc::new(log_transaction_hash.finish()),
-            Arc::new(log_block_hash.finish()),
-            Arc::new(log_block_number.finish()),
-            Arc::new(log_address.finish()),
-            Arc::new(log_data.finish()),
-            Arc::new(log_topic0.finish()),
-            Arc::new(log_topic1.finish()),
-            Arc::new(log_topic2.finish()),
-            Arc::new(log_topic3.finish()),
-        ],
-    )
+    let logs = ArrowChunk::try_new(vec![
+        log_removed.as_box(),
+        log_log_index.as_box(),
+        log_transaction_index.as_box(),
+        log_transaction_hash.as_box(),
+        log_block_hash.as_box(),
+        log_block_number.as_box(),
+        log_address.as_box(),
+        log_data.as_box(),
+        log_topic0.as_box(),
+        log_topic1.as_box(),
+        log_topic2.as_box(),
+        log_topic3.as_box(),
+    ])
     .unwrap();
 
-    (blocks, transactions, logs)
-}
-
-pub fn concat_u64(a: u64, b: u64) -> [u8; 16] {
-    let mut buf = [0; 16];
-
-    buf[..8].copy_from_slice(a.to_be_bytes().as_slice());
-    buf[8..].copy_from_slice(b.to_be_bytes().as_slice());
-
-    buf
+    Batches {
+        logs,
+        blocks,
+        transactions,
+    }
 }

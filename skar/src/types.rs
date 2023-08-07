@@ -1,9 +1,10 @@
 use std::collections::BTreeSet;
 
 use arrayvec::ArrayVec;
-use arrow::record_batch::RecordBatch;
 use serde::{Deserialize, Serialize};
 use skar_format::{Address, FixedSizeData, LogArgument};
+
+use crate::query::ArrowBatch;
 
 pub type Sighash = FixedSizeData<4>;
 
@@ -51,13 +52,20 @@ pub struct FieldSelection {
 
 #[derive(Default)]
 pub struct QueryResult {
-    pub data: Vec<QueryResultData>,
+    pub data: QueryResultData,
     pub next_block: u64,
 }
 
 #[derive(Default)]
 pub struct QueryResultData {
-    pub logs: Vec<RecordBatch>,
-    pub transactions: Vec<RecordBatch>,
-    pub blocks: Vec<RecordBatch>,
+    pub logs: Vec<ArrowBatch>,
+    pub transactions: Vec<ArrowBatch>,
+    pub blocks: Vec<ArrowBatch>,
+}
+
+pub struct QueryContext {
+    pub query: Query,
+    // these "set"s are used for joining transactions and blocks
+    pub transaction_set: BTreeSet<(u64, u64)>,
+    pub block_set: BTreeSet<u64>,
 }

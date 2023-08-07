@@ -1,169 +1,169 @@
-use std::path::Path;
+use std::{cmp, fs, path::Path, sync::Arc};
 
 use crate::{
     config::{ParquetConfig, TableConfig},
     schema,
-    skar_runner::State,
+    state::{ArrowChunk, State},
 };
-use anyhow::{Context, Error, Result};
-use arrow::{
-    array::{Array, ArrayRef, UInt32Array},
-    compute,
-    datatypes::SchemaRef,
-    record_batch::RecordBatch,
-    row::{RowConverter, SortField},
-};
-use parquet::{
-    arrow::ArrowWriter,
-    basic::{Compression, Encoding},
-    file::properties::{
-        EnabledStatistics, WriterProperties, WriterPropertiesBuilder, WriterVersion,
+use anyhow::{anyhow, Context, Error, Result};
+use arrow2::{
+    array::UInt32Array,
+    compute::{
+        self,
+        sort::{lexsort_to_indices, SortColumn},
     },
-    format::SortingColumn,
+    datatypes::{Schema, SchemaRef},
+    io::parquet::write::{
+        transverse, CompressionOptions, Encoding, FileWriter, RowGroupIterator, Version,
+        WriteOptions,
+    },
 };
-
-fn common_write_properties(cfg: &TableConfig) -> WriterPropertiesBuilder {
-    WriterProperties::builder()
-        .set_writer_version(WriterVersion::PARQUET_2_0)
-        .set_compression(Compression::LZ4_RAW)
-        .set_encoding(Encoding::PLAIN)
-        .set_data_page_size_limit(cfg.data_page_size_limit)
-        .set_max_row_group_size(cfg.max_row_group_size)
-}
-
-fn indices_to_sorting_columns(indices: &[usize]) -> Vec<SortingColumn> {
-    indices
-        .iter()
-        .map(|column_idx| SortingColumn {
-            column_idx: i32::try_from(*column_idx).unwrap(),
-            descending: false,
-            nulls_first: false,
-        })
-        .collect()
-}
 
 const BLOCK_SORT_INDICES: &[usize] = &[
-    // block.number
-    0,
+    0, // block.number
 ];
 
 const TX_SORT_INDICES: &[usize] = &[
-    // block_number
-    1, // transaction_index
-    9,
+    1, // block_number
+    9, // transaction_index
 ];
 
 const LOG_SORT_INDICES: &[usize] = &[
-    // block_number
-    6, // transaction_index
-    2, // log_index
-    1,
+    6, // block_number
+    2, // transaction_index
+    1, // log_index
 ];
 
-fn blocks_write_properties(cfg: &TableConfig) -> WriterProperties {
-    common_write_properties(cfg)
-        .set_sorting_columns(Some(indices_to_sorting_columns(BLOCK_SORT_INDICES)))
-        .set_column_statistics_enabled("number".into(), EnabledStatistics::Chunk)
-        .build()
-}
-
-fn transactions_write_properties(
-    cfg: &TableConfig,
-    from_ndv: u64,
-    to_ndv: u64,
-) -> WriterProperties {
-    common_write_properties(cfg)
-        .set_sorting_columns(Some(indices_to_sorting_columns(TX_SORT_INDICES)))
-        .set_column_statistics_enabled("block_number".into(), EnabledStatistics::Chunk)
-        .set_column_statistics_enabled("transaction_index".into(), EnabledStatistics::Chunk)
-        .set_column_statistics_enabled("tx_id".into(), EnabledStatistics::Chunk)
-        // Setup bloom filter
-        .set_column_bloom_filter_enabled("from".into(), true)
-        .set_column_bloom_filter_fpp("from".into(), 0.01)
-        .set_column_bloom_filter_ndv("from".into(), from_ndv)
-        .set_column_bloom_filter_enabled("to".into(), true)
-        .set_column_bloom_filter_fpp("to".into(), 0.01)
-        .set_column_bloom_filter_ndv("to".into(), to_ndv)
-        .build()
-}
-
-fn logs_write_properties(cfg: &TableConfig, address_ndv: u64) -> WriterProperties {
-    common_write_properties(cfg)
-        .set_sorting_columns(Some(indices_to_sorting_columns(LOG_SORT_INDICES)))
-        .set_column_statistics_enabled("block_number".into(), EnabledStatistics::Chunk)
-        .set_column_statistics_enabled("log_index".into(), EnabledStatistics::Chunk)
-        .set_column_statistics_enabled("transaction_index".into(), EnabledStatistics::Chunk)
-        // Setup bloom filter
-        .set_column_bloom_filter_enabled("address".into(), true)
-        .set_column_bloom_filter_fpp("address".into(), 0.01)
-        .set_column_bloom_filter_ndv("address".into(), address_ndv)
-        .build()
-}
-
 async fn write_parquet_file(
-    data: &RecordBatch,
+    sort_indices: &[usize],
+    data: &[Arc<ArrowChunk>],
     path: &Path,
     schema: SchemaRef,
-    props: WriterProperties,
+    table_cfg: &TableConfig,
 ) -> Result<()> {
     tokio::task::block_in_place(|| {
-        let mut file = std::fs::File::create(path).context("create parquet file for writing")?;
-        let mut writer = ArrowWriter::try_new(&mut file, schema, Some(props))
-            .context("create parquet writer")?;
-        writer
-            .write(data)
-            .context("write arrow data to parquet file")?;
+        let row_groups = prepare_row_groups(sort_indices, data, table_cfg.max_row_group_size)
+            .context("prepare row groups")?;
 
-        writer.close().context("close parquet writer")?;
+        let encodings = schema
+            .fields
+            .iter()
+            .map(|f| transverse(&f.data_type, |_| Encoding::Plain))
+            .collect();
+
+        let row_groups = RowGroupIterator::try_new(
+            row_groups.into_iter().map(Ok),
+            &schema,
+            parquet_write_options(),
+            encodings,
+        )
+        .context("create row groups")?;
+
+        let mut buf = Vec::new();
+        let mut writer =
+            FileWriter::try_new(&mut buf, Schema::clone(&schema), parquet_write_options())
+                .context("create file writer")?;
+
+        for group in row_groups {
+            writer.write(group.unwrap()).context("write file data")?;
+        }
+
+        let _size = writer.end(None).context("write footer")?;
+
+        fs::write(path, buf).context("write file to disk")?;
 
         Ok::<_, Error>(())
     })
 }
 
-fn lexsort_to_indices(arrays: &[ArrayRef]) -> UInt32Array {
-    let fields = arrays
-        .iter()
-        .map(|a| SortField::new(a.data_type().clone()))
-        .collect();
-    let mut converter = RowConverter::new(fields).unwrap();
-    let rows = converter.convert_columns(arrays).unwrap();
-    let mut sort: Vec<_> = rows.iter().enumerate().collect();
-    sort.sort_unstable_by(|(_, a), (_, b)| a.cmp(b));
-    UInt32Array::from_iter_values(sort.iter().map(|(i, _)| *i as u32))
+fn prepare_row_groups(
+    sort_indices: &[usize],
+    data: &[Arc<ArrowChunk>],
+    items_per_chunk: usize,
+) -> Result<Vec<ArrowChunk>> {
+    let chunk = concat_chunks(data).context("concatenate chunks")?;
+    let chunk = lexsort_chunk(sort_indices, &chunk).context("sort chunk")?;
+
+    let len = chunk.len();
+
+    (0..len)
+        .step_by(items_per_chunk)
+        .map(|start| {
+            let end = cmp::min(len, start + items_per_chunk);
+            let length = end - start;
+            Ok(ArrowChunk::new(
+                chunk.iter().map(|arr| arr.sliced(start, length)).collect(),
+            ))
+        })
+        .collect()
 }
 
-fn lexsort(indices: &[usize], batch: &RecordBatch) -> RecordBatch {
-    let cols = indices
-        .iter()
-        .map(|i| batch.column(*i).clone())
-        .collect::<Vec<ArrayRef>>();
-    let indices = lexsort_to_indices(cols.as_slice());
+pub fn concat_chunks(chunks: &[Arc<ArrowChunk>]) -> Result<ArrowChunk> {
+    if chunks.is_empty() {
+        return Err(anyhow!("can't concat 0 chunks"));
+    }
 
-    let cols = batch
+    let num_cols = chunks[0].columns().len();
+
+    let cols = (0..num_cols)
+        .map(|col| {
+            let arrs = chunks
+                .iter()
+                .map(|chunk| {
+                    chunk
+                        .columns()
+                        .get(col)
+                        .map(|col| col.as_ref())
+                        .context("get column")
+                })
+                .collect::<Result<Vec<_>>>()?;
+            compute::concatenate::concatenate(&arrs).context("concat arrays")
+        })
+        .collect::<Result<Vec<_>>>()?;
+
+    Ok(ArrowChunk::new(cols))
+}
+
+fn lexsort_chunk(sort_indices: &[usize], chunk: &ArrowChunk) -> Result<ArrowChunk> {
+    let sort_cols = sort_indices
+        .iter()
+        .map(|i| {
+            let values = chunk.columns().get(*i).context("get column")?.as_ref();
+
+            Ok(SortColumn {
+                values,
+                options: None,
+            })
+        })
+        .collect::<Result<Vec<_>>>()?;
+
+    let indices: UInt32Array = lexsort_to_indices(&sort_cols, None).context("sort data")?;
+
+    let cols = chunk
         .columns()
         .iter()
-        .map(|c| compute::take(c, &indices, None).unwrap())
-        .collect();
+        .map(|col| compute::take::take(col.as_ref(), &indices).context("sort column"))
+        .collect::<Result<Vec<_>>>()?;
 
-    RecordBatch::try_new(batch.schema(), cols).unwrap()
+    Ok(ArrowChunk::new(cols))
 }
 
-pub(crate) async fn write_folder(
-    state: &State,
-    path: &Path,
-    cfg: &ParquetConfig,
-    addr_ndv: u64,
-) -> Result<()> {
+pub(crate) async fn write_folder(state: &State, path: &Path, cfg: &ParquetConfig) -> Result<()> {
+    let in_mem = state.in_mem.load_full();
+
     let blocks = {
         let mut path = path.to_owned();
         path.push("blocks.parquet");
 
+        let in_mem = in_mem.clone();
+
         async move {
             write_parquet_file(
-                &lexsort(BLOCK_SORT_INDICES, &state.in_mem.blocks),
+                BLOCK_SORT_INDICES,
+                &in_mem.blocks.data,
                 &path,
                 schema::block_header(),
-                blocks_write_properties(&cfg.blocks),
+                &cfg.blocks,
             )
             .await
             .context("write blocks.parquet")?;
@@ -175,12 +175,16 @@ pub(crate) async fn write_folder(
     let transactions = {
         let mut path = path.to_owned();
         path.push("transactions.parquet");
+
+        let in_mem = in_mem.clone();
+
         async move {
             write_parquet_file(
-                &lexsort(TX_SORT_INDICES, &state.in_mem.transactions),
+                TX_SORT_INDICES,
+                &in_mem.transactions.data,
                 &path,
                 schema::transaction(),
-                transactions_write_properties(&cfg.transactions, addr_ndv, addr_ndv),
+                &cfg.transactions,
             )
             .await
             .context("write transactions.parquet")?;
@@ -194,10 +198,11 @@ pub(crate) async fn write_folder(
         path.push("logs.parquet");
         async move {
             write_parquet_file(
-                &lexsort(LOG_SORT_INDICES, &state.in_mem.logs),
+                LOG_SORT_INDICES,
+                &in_mem.logs.data,
                 &path,
                 schema::log(),
-                logs_write_properties(&cfg.logs, addr_ndv),
+                &cfg.logs,
             )
             .await
             .context("write logs.parquet")?;
@@ -213,4 +218,13 @@ pub(crate) async fn write_folder(
     l?;
 
     Ok(())
+}
+
+pub fn parquet_write_options() -> WriteOptions {
+    WriteOptions {
+        write_statistics: false,
+        version: Version::V2,
+        compression: CompressionOptions::Lz4Raw,
+        data_pagesize_limit: Some(usize::MAX),
+    }
 }

@@ -1,14 +1,18 @@
 use anyhow::{anyhow, Context, Result};
-use arrow::array::{Array, BinaryArray, UInt64Array};
-use arrow::record_batch::RecordBatch;
+use arrow2::{
+    array::{Array, BinaryArray, UInt64Array},
+    datatypes::Schema,
+    io::parquet,
+};
 use ethbloom::{Bloom, Input};
-use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
 use skar_format::{Address, LogArgument};
 use std::{
     collections::{BTreeMap, BTreeSet},
     fs::File,
     path::Path,
 };
+
+use crate::state::ArrowChunk;
 
 pub fn validate_parquet_folder_data(path: &Path) -> Result<()> {
     let mut path = path.to_owned();
@@ -61,10 +65,17 @@ pub fn validate_parquet_folder_data(path: &Path) -> Result<()> {
     Ok(())
 }
 
-fn get_column<'a, T: 'static>(batch: &'a RecordBatch, name: &str) -> Result<&'a T> {
-    let col = batch
-        .column_by_name(name)
-        .context(format!("get {name} column"))?
+fn get_column<'a, T: 'static>(chunk: &'a ArrowChunk, schema: &Schema, name: &str) -> Result<&'a T> {
+    let col = schema
+        .fields
+        .iter()
+        .enumerate()
+        .find(|(_, f)| f.name == name)
+        .context("field not found")?;
+    let col = chunk
+        .columns()
+        .get(col.0)
+        .context("column not found")?
         .as_any()
         .downcast_ref::<T>()
         .context(format!("{name} is not the expected type"))?;
@@ -75,20 +86,26 @@ fn get_column<'a, T: 'static>(batch: &'a RecordBatch, name: &str) -> Result<&'a 
 fn load_tx_identities(path: &Path) -> Result<BTreeSet<(u64, u64)>> {
     let mut tx_ident = BTreeSet::new();
 
-    let file = File::open(path).context("open parquet file")?;
+    let mut reader = File::open(path).context("open parquet file")?;
+    let metadata = parquet::read::read_metadata(&mut reader).context("read metadata")?;
+    let schema = parquet::read::infer_schema(&metadata).context("infer schema")?;
+    let chunks = parquet::read::FileReader::new(
+        reader,
+        metadata.row_groups,
+        schema.clone(),
+        None,
+        None,
+        None,
+    );
 
-    let builder =
-        ParquetRecordBatchReaderBuilder::try_new(file).context("create parquet reader")?;
-    let reader = builder.build().context("start parquet reader")?;
+    for chunk in chunks {
+        let chunk = chunk.context("read chunk from parquet")?;
 
-    for batch in reader {
-        let batch = batch.context("read batch from parquet")?;
-
-        let tx_index = get_column::<UInt64Array>(&batch, "transaction_index")?;
-        let block_num = get_column::<UInt64Array>(&batch, "block_number")?;
+        let tx_index = get_column::<UInt64Array>(&chunk, &schema, "transaction_index")?;
+        let block_num = get_column::<UInt64Array>(&chunk, &schema, "block_number")?;
 
         for (b, t) in block_num.iter().zip(tx_index) {
-            let ident = (b.unwrap(), t.unwrap());
+            let ident = (*b.unwrap(), *t.unwrap());
             tx_ident.insert(ident);
         }
     }
@@ -99,21 +116,27 @@ fn load_tx_identities(path: &Path) -> Result<BTreeSet<(u64, u64)>> {
 fn load_block_data(path: &Path) -> Result<BTreeMap<u64, Vec<u8>>> {
     let mut block_data = BTreeMap::new();
 
-    let file = File::open(path).context("open parquet file")?;
+    let mut reader = File::open(path).context("open parquet file")?;
+    let metadata = parquet::read::read_metadata(&mut reader).context("read metadata")?;
+    let schema = parquet::read::infer_schema(&metadata).context("infer schema")?;
+    let chunks = parquet::read::FileReader::new(
+        reader,
+        metadata.row_groups,
+        schema.clone(),
+        None,
+        None,
+        None,
+    );
 
-    let builder =
-        ParquetRecordBatchReaderBuilder::try_new(file).context("create parquet reader")?;
-    let reader = builder.build().context("start parquet reader")?;
+    for chunk in chunks {
+        let chunk = chunk.context("read chunk from parquet")?;
 
-    for batch in reader {
-        let batch = batch.context("read batch from parquet")?;
-
-        let logs_bloom = get_column::<BinaryArray>(&batch, "logs_bloom")?;
-        let block_num = get_column::<UInt64Array>(&batch, "number")?;
+        let logs_bloom = get_column::<BinaryArray<i32>>(&chunk, &schema, "logs_bloom")?;
+        let block_num = get_column::<UInt64Array>(&chunk, &schema, "number")?;
 
         for (b, lb) in block_num.iter().zip(logs_bloom.iter()) {
             let data = (b.unwrap(), lb.unwrap());
-            block_data.insert(data.0, data.1.to_vec());
+            block_data.insert(*data.0, data.1.to_vec());
         }
     }
 
@@ -123,35 +146,42 @@ fn load_block_data(path: &Path) -> Result<BTreeMap<u64, Vec<u8>>> {
 fn load_log_data(path: &Path) -> Result<BTreeMap<u64, BTreeMap<u64, LogData>>> {
     let mut res_data = BTreeMap::new();
 
-    let file = File::open(path).context("open parquet file")?;
+    let mut reader = File::open(path).context("open parquet file")?;
 
-    let builder =
-        ParquetRecordBatchReaderBuilder::try_new(file).context("create parquet reader")?;
-    let reader = builder.build().context("start parquet reader")?;
+    let metadata = parquet::read::read_metadata(&mut reader).context("read metadata")?;
+    let schema = parquet::read::infer_schema(&metadata).context("infer schema")?;
+    let chunks = parquet::read::FileReader::new(
+        reader,
+        metadata.row_groups,
+        schema.clone(),
+        None,
+        None,
+        None,
+    );
 
-    for batch in reader {
-        let batch = batch.context("read batch from parquet")?;
+    for chunk in chunks {
+        let chunk = chunk.context("read chunk from parquet")?;
 
-        let log_idx = get_column::<UInt64Array>(&batch, "log_index")?;
-        let block_num = get_column::<UInt64Array>(&batch, "block_number")?;
-        let tx_idx = get_column::<UInt64Array>(&batch, "transaction_index")?;
-        let address = get_column::<BinaryArray>(&batch, "address")?;
+        let log_idx = get_column::<UInt64Array>(&chunk, &schema, "log_index")?;
+        let block_num = get_column::<UInt64Array>(&chunk, &schema, "block_number")?;
+        let tx_idx = get_column::<UInt64Array>(&chunk, &schema, "transaction_index")?;
+        let address = get_column::<BinaryArray<i32>>(&chunk, &schema, "address")?;
 
         let topics = (0..4)
             .map(|i| {
                 let col_name = format!("topic{i}");
-                get_column::<BinaryArray>(&batch, &col_name)
+                get_column::<BinaryArray<i32>>(&chunk, &schema, &col_name)
             })
             .collect::<Result<Vec<_>>>()?;
         assert_eq!(topics.len(), 4);
 
-        for i in 0..batch.num_rows() {
+        for i in 0..chunk.len() {
             let blk_num = block_num.value(i);
             let blk = res_data.entry(blk_num).or_insert(BTreeMap::new());
 
             let mut log_topics = Vec::new();
             for topic_ref in topics.iter() {
-                if !topic_ref.is_null(i) {
+                if topic_ref.is_valid(i) {
                     log_topics.push(topic_ref.value(i).try_into().unwrap());
                 } else {
                     break;

@@ -49,17 +49,14 @@ path = "data/parquet"
 [parquet.blocks]
 max_file_size = 100000
 max_row_group_size = 10000
-data_page_size_limit = 1024000
 
 [parquet.transactions]
 max_file_size = 100000
 max_row_group_size = 10000
-data_page_size_limit = 1000000
 
 [parquet.logs]
 max_file_size = 100000
 max_row_group_size = 10000
-data_page_size_limit = 1000000
 
 [ingest.rpc_client]
 http_req_timeout_millis = 5000

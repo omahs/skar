@@ -1,6 +1,6 @@
 mod data_provider;
 mod execution;
 mod handler;
-mod pool;
 
-pub use pool::QueryHandlerPool;
+pub use data_provider::ArrowBatch;
+pub use handler::Handler;

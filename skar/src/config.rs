@@ -45,11 +45,6 @@ pub struct TableConfig {
     /// This is implemented as best effort, so
     /// the actual row groups might contain more records.
     pub max_row_group_size: usize,
-    /// Maximum page size limit in terms of bytes.
-    ///
-    /// This is implemented as best effort, so
-    /// actual pages might be bigger.
-    pub data_page_size_limit: usize,
 }
 
 #[derive(Serialize, Deserialize)]
