@@ -12,6 +12,7 @@ pub type Sighash = FixedSizeData<4>;
 pub struct LogSelection {
     #[serde(default)]
     pub address: Vec<Address>,
+    #[serde(default)]
     pub topics: ArrayVec<Vec<LogArgument>, 4>,
 }
 

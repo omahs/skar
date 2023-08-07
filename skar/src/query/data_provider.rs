@@ -295,6 +295,7 @@ const TX_QUERY_FIELDS: &[&str] = &[
 ];
 const LOG_QUERY_FIELDS: &[&str] = &[
     "block_number",
+    "transaction_index",
     "address",
     "topic0",
     "topic1",

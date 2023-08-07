@@ -130,7 +130,7 @@ fn log_selection_to_filter(
     topics: &[&BinaryArray<i32>; 4],
     selection: &LogSelection,
 ) -> BooleanArray {
-    let mut filter = unset_bool_array(address.len());
+    let mut filter = set_bool_array(address.len());
 
     if !selection.address.is_empty() {
         let addrs = selection.address.iter().map(|b| b.as_slice()).collect();
