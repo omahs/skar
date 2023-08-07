@@ -7,7 +7,7 @@ use crate::{
 use anyhow::{Context, Result};
 use arrow2::{
     array::{BinaryArray, BooleanArray, MutableBooleanArray, UInt64Array, UInt8Array},
-    bitmap::Bitmap,
+    bitmap::{Bitmap, MutableBitmap},
     compute,
     datatypes::{DataType, Schema},
     scalar::PrimitiveScalar,
@@ -347,13 +347,13 @@ fn in_set_u64(data: &UInt64Array, set: &BTreeSet<u64>) -> BooleanArray {
 }
 
 fn in_set_binary(data: &BinaryArray<i32>, set: &BTreeSet<&[u8]>) -> BooleanArray {
-    let mut bools = MutableBooleanArray::with_capacity(data.len());
+    let mut bools = MutableBitmap::with_capacity(data.len());
 
-    for val in data.iter() {
-        bools.push(val.map(|v| set.contains(v)));
+    for val in data.values_iter() {
+        bools.push(set.contains(val));
     }
 
-    bools.into()
+    BooleanArray::new(DataType::Boolean, bools.into(), data.validity().cloned())
 }
 
 fn in_set_u64_double(
@@ -364,14 +364,25 @@ fn in_set_u64_double(
     let len = left.len();
     assert_eq!(len, right.len());
 
-    let mut bools = MutableBooleanArray::with_capacity(len);
+    let mut bools = MutableBitmap::with_capacity(left.len());
 
-    for (l, r) in left.iter().zip(right.iter()) {
-        let lr = l.and_then(|l| r.map(|r| (*l, *r)));
-        bools.push(lr.map(|lr| set.contains(&lr)));
+    for (&l, &r) in left.values_iter().zip(right.values_iter()) {
+        bools.push(set.contains(&(l, r)));
     }
 
-    bools.into()
+    let validity = combine_validities(left.validity(), right.validity());
+
+    BooleanArray::new(DataType::Boolean, bools.into(), validity)
+}
+
+fn combine_validities(left: Option<&Bitmap>, right: Option<&Bitmap>) -> Option<Bitmap> {
+    match left {
+        Some(lv) => match right {
+            Some(rv) => Some(lv & rv),
+            None => Some(lv.clone()),
+        },
+        None => right.cloned(),
+    }
 }
 
 fn set_bool_array(len: usize) -> BooleanArray {
