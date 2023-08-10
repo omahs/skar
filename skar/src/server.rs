@@ -100,7 +100,7 @@ async fn run_query(
 
     write!(
         &mut bytes,
-        r#"],"archiveHeight":{},"nextBlock":{},"totalTime":{}}}"#,
+        r#"],"archive_height":{},"next_block":{},"total_execution_time":{}}}"#,
         height.map(|n| n.to_string()).unwrap_or("null".to_owned()),
         next_block,
         query_start.elapsed().as_millis(),

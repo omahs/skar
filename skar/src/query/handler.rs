@@ -1,4 +1,5 @@
 use std::{
+    cmp,
     path::{Path, PathBuf},
     sync::Arc,
     time::Instant,
@@ -137,7 +138,7 @@ impl Iterator for QueryResultIterator {
                 let query_res = execute_query(&data_provider, &self.query)
                     .map(|data| QueryResult {
                         data,
-                        next_block: in_mem.to_block,
+                        next_block: next_block(in_mem.to_block, self.query.to_block),
                     })
                     .context("execute in memory query");
 
@@ -158,7 +159,7 @@ impl Iterator for QueryResultIterator {
         {
             return Some(Ok(QueryResult {
                 data: QueryResultData::default(),
-                next_block: folder_index.block_range.1,
+                next_block: next_block(folder_index.block_range.1, self.query.to_block),
             }));
         }
 
@@ -239,6 +240,14 @@ fn prune_query(query: &Query, filter: &SbbfFilter) -> Query {
         field_selection: query.field_selection.clone(),
         include_all_blocks: query.include_all_blocks,
     }
+}
+
+fn next_block(mut to_block: u64, query_limit: Option<u64>) -> u64 {
+    if let Some(limit) = query_limit {
+        to_block = cmp::min(limit, to_block);
+    }
+
+    to_block
 }
 
 #[cfg(test)]
