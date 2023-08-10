@@ -1389,6 +1389,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "5b40af805b3121feab8a3c29f04d8ad262fa8e0561883e7653e024ae4479e6de"
 
 [[package]]
+name = "prefix-hex"
+version = "0.7.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "1f1799f398371ad6957951ec446d3ff322d35c46d9db2e217b67e828b311c249"
+dependencies = [
+ "hex",
+]
+
+[[package]]
 name = "prettyplease"
 version = "0.2.12"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1817,11 +1826,12 @@ dependencies = [
  "env_logger",
  "ethbloom",
  "futures",
- "hex",
+ "hex-literal",
  "itertools 0.11.0",
  "log",
  "mimalloc",
  "page_size",
+ "prefix-hex",
  "reth-libmdbx",
  "sbbf-rs-safe",
  "serde",
@@ -1832,6 +1842,7 @@ dependencies = [
  "toml",
  "tower",
  "tower-http",
+ "uuid",
  "wyhash",
 ]
 
@@ -2248,6 +2259,16 @@ name = "utf8parse"
 version = "0.2.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "711b9620af191e0cdc7468a8d14e709c3dcdb115b36f838e601583af800a370a"
+
+[[package]]
+name = "uuid"
+version = "1.4.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "79daa5ed5740825c40b389c5e50312b9c86df53fccd33f281df655642b43869d"
+dependencies = [
+ "getrandom",
+ "rand",
+]
 
 [[package]]
 name = "version_check"

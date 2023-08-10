@@ -75,12 +75,6 @@ async fn run_query(
         .handle(query)
         .context("start running query")?;
 
-    let height = state
-        .handler
-        .archive_height()
-        .await
-        .context("get archive height")?;
-
     let mut bytes = br#"{"data":["#.to_vec();
 
     let mut next_block = 0;
@@ -89,11 +83,7 @@ async fn run_query(
     while let Some(res) = rx.recv().await {
         let query_result = res.context("execute parquet query")?;
 
-        if put_comma {
-            bytes.push(b',');
-        }
-
-        put_comma = extend_bytes_with_data(&mut bytes, &query_result.data)?;
+        put_comma |= extend_bytes_with_data(put_comma, &mut bytes, &query_result.data)?;
 
         next_block = query_result.next_block;
 
@@ -101,6 +91,12 @@ async fn run_query(
             break;
         }
     }
+
+    let height = state
+        .handler
+        .archive_height()
+        .await
+        .context("get archive height")?;
 
     write!(
         &mut bytes,
@@ -121,9 +117,17 @@ async fn run_query(
 }
 
 // returns if it wrote any data
-fn extend_bytes_with_data(bytes: &mut Vec<u8>, data: &QueryResultData) -> Result<bool, AppError> {
+fn extend_bytes_with_data(
+    put_comma_outer: bool,
+    bytes: &mut Vec<u8>,
+    data: &QueryResultData,
+) -> Result<bool, AppError> {
     if data.logs.is_empty() && data.transactions.is_empty() && data.blocks.is_empty() {
         return Ok(false);
+    }
+
+    if put_comma_outer {
+        bytes.push(b',');
     }
 
     let data = hex_encode_data(data).context("hex encode the data")?;
@@ -260,7 +264,7 @@ fn hex_encode(input: &BinaryArray<i32>) -> Utf8Array<i32> {
     let mut arr = MutableUtf8Array::new();
 
     for buf in input.iter() {
-        arr.push(buf.map(hex::encode));
+        arr.push(buf.map(prefix_hex::encode));
     }
 
     arr.into()

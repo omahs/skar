@@ -10,6 +10,12 @@ use std::result::Result as StdResult;
 )]
 pub struct Quantity(Box<[u8]>);
 
+impl AsRef<[u8]> for Quantity {
+    fn as_ref(&self) -> &[u8] {
+        &self.0
+    }
+}
+
 impl From<Vec<u8>> for Quantity {
     fn from(buf: Vec<u8>) -> Self {
         assert!(!buf.is_empty());

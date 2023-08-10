@@ -4,6 +4,7 @@ use anyhow::Context;
 use sbbf_rs_safe::Filter as Sbbf;
 use serde::{de::Visitor, Deserialize, Deserializer, Serialize, Serializer};
 
+#[derive(Debug)]
 pub struct BloomFilter(pub Sbbf);
 
 impl BloomFilter {}

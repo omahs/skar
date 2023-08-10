@@ -1,7 +1,7 @@
 use std::{
     cmp,
     fs::File,
-    io::{BufReader, Read, Seek, SeekFrom, Write},
+    io::{BufReader, ErrorKind, Read, Seek, SeekFrom, Write},
     path::{Path, PathBuf},
 };
 
@@ -122,7 +122,7 @@ impl Db {
             None => {
                 if folder_index.block_range.0 != 0 {
                     return Err(anyhow!(
-                        "there are no blocks in db but folder_infex.from={}",
+                        "there are no blocks in db but folder_index.from={}",
                         folder_index.block_range.0
                     ));
                 }
@@ -165,7 +165,9 @@ impl Db {
                 .context("seek to rg tip offset")?;
             let size = read_size(&mut rg_index_f).context("read rg idx size")?;
 
-            folder_index.row_group_index_offset = row_group_index_offset + size;
+            folder_index.row_group_index_offset = row_group_index_offset + size + 4;
+        } else {
+            folder_index.row_group_index_offset = 0;
         }
 
         rg_index_f
@@ -178,7 +180,7 @@ impl Db {
             .write_all(&size.to_be_bytes())
             .context("write size of rg index")?;
         rg_index_f.write_all(&rg_index).context("write rg index")?;
-        rg_index_f.sync_all().context("sync file to disk")?;
+        rg_index_f.flush().context("sync file to disk")?;
 
         let block_range = folder_index.block_range;
         let folder_index = bincode::serialize(&folder_index).context("serialize folder index")?;
@@ -195,7 +197,7 @@ impl Db {
         folder_index_f
             .write_all(&folder_index)
             .context("write folder index")?;
-        folder_index_f.sync_all().context("sync file to disk")?;
+        folder_index_f.flush().context("sync file to disk")?;
 
         txn.put(
             db.dbi(),
@@ -210,15 +212,27 @@ impl Db {
         Ok(())
     }
 
-    pub fn iterate_folder_indices(&self, block_range: BlockRange) -> Result<FolderIndexIterator> {
-        let mut folder_index =
-            BufReader::new(File::open(&self.folder_index_path).context("open folder index file")?);
+    pub fn iterate_folder_indices(
+        &self,
+        block_range: BlockRange,
+    ) -> Result<Option<FolderIndexIterator>> {
+        let txn = self.env.begin_ro_txn().context("begin read only txn")?;
+        let db = txn.open_db(None).context("open default db from txn")?;
+
+        let mut folder_index = match File::open(&self.folder_index_path) {
+            Ok(folder_index) => BufReader::new(folder_index),
+            Err(e) => {
+                if e.kind() == ErrorKind::NotFound {
+                    return Ok(None);
+                } else {
+                    return Err(anyhow!("failed to open folder index file: {e}"));
+                }
+            }
+        };
+
         let row_group_index = BufReader::new(
             File::open(&self.row_group_index_path).context("open row group index file")?,
         );
-
-        let txn = self.env.begin_ro_txn().context("begin read only txn")?;
-        let db = txn.open_db(None).context("open default db from txn")?;
 
         let mut cursor = txn.cursor(&db).context("open cursor")?;
 
@@ -229,45 +243,64 @@ impl Db {
         let last = match last {
             Some((key, _)) => block_range_from_key(key).1,
             None => {
-                return Ok(FolderIndexIterator {
-                    finished: true,
-                    to_block: 0,
-                    folder_index,
-                    row_group_index,
-                })
+                return Ok(None);
             }
         };
 
         let key = block_range_to_key(BlockRange(block_range.0, 0));
 
-        match cursor
+        let offset = if let Some((range, offset)) = cursor
             .set_range::<[u8; 16], [u8; 4]>(&key)
             .context("get start pos")?
         {
-            Some((_, offset)) => {
-                let offset = u32::from_be_bytes(offset);
-                folder_index
-                    .seek(SeekFrom::Start(offset as u64))
-                    .context("seek to the start of the folder index")?;
+            let range = block_range_from_key(range);
+
+            if range.0 <= block_range.0 {
+                if block_range.1 <= range.0 {
+                    return Ok(None);
+                }
+
+                Some(u32::from_be_bytes(offset))
+            } else {
+                None
             }
-            None => {
-                return Ok(FolderIndexIterator {
-                    finished: true,
-                    to_block: 0,
-                    folder_index,
-                    row_group_index,
-                })
-            }
-        }
+        } else {
+            None
+        };
+
+        let offset = match offset {
+            None => match cursor
+                .prev::<[u8; 16], [u8; 4]>()
+                .context("get start pos")?
+            {
+                Some((range, offset)) => {
+                    let range = block_range_from_key(range);
+
+                    if block_range.0 >= range.1 {
+                        return Ok(None);
+                    }
+
+                    u32::from_be_bytes(offset)
+                }
+                None => {
+                    return Ok(None);
+                }
+            },
+            Some(offset) => offset,
+        };
+
+        folder_index
+            .seek(SeekFrom::Start(offset as u64))
+            .context("seek to the start of the folder index")?;
 
         let to_block = cmp::min(block_range.1, last);
 
-        Ok(FolderIndexIterator {
+        Ok(Some(FolderIndexIterator {
             finished: false,
             to_block,
             folder_index,
             row_group_index,
-        })
+        }))
     }
 }
 
@@ -359,4 +392,174 @@ fn block_range_from_key(key: [u8; 16]) -> BlockRange {
         u64::from_be_bytes(key[..8].try_into().unwrap()),
         u64::from_be_bytes(key[8..].try_into().unwrap()),
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use sbbf_rs_safe::Filter;
+    use std::env::temp_dir;
+
+    #[test]
+    fn test_iter() {
+        let mut tmp = temp_dir();
+        tmp.push(format!("{}", uuid::Uuid::new_v4()));
+
+        let folder_index_path = tmp.clone();
+
+        tmp.pop();
+        tmp.push(format!("{}", uuid::Uuid::new_v4()));
+
+        let row_group_index_path = tmp.clone();
+
+        tmp.pop();
+        tmp.push(format!("{}", uuid::Uuid::new_v4()));
+
+        let db_path = tmp;
+
+        let db = Db {
+            folder_index_path,
+            row_group_index_path,
+            env: Environment::new().open(&db_path).unwrap(),
+        };
+
+        let err_res = db.insert_folder_index_impl(
+            FolderIndex {
+                block_range: BlockRange(1, 123456),
+                address_filter: BloomFilter(Filter::new(8, 10000)),
+                row_group_index_offset: 0,
+            },
+            RowGroupIndex {
+                block: Vec::new(),
+                transaction: Vec::new(),
+                log: Vec::new(),
+            },
+        );
+
+        assert!(err_res.is_err());
+
+        db.insert_folder_index_impl(
+            FolderIndex {
+                block_range: BlockRange(0, 123456),
+                address_filter: BloomFilter(Filter::new(8, 10000)),
+                row_group_index_offset: 0,
+            },
+            RowGroupIndex {
+                block: Vec::new(),
+                transaction: Vec::new(),
+                log: Vec::new(),
+            },
+        )
+        .unwrap();
+
+        let indices = db
+            .iterate_folder_indices(BlockRange(0, 123))
+            .unwrap()
+            .unwrap()
+            .map(|a| a.unwrap().block_range)
+            .collect::<Vec<_>>();
+        assert_eq!(indices, vec![BlockRange(0, 123456)]);
+
+        let indices = db
+            .iterate_folder_indices(BlockRange(123456, 99999999999))
+            .unwrap();
+        assert!(indices.is_none());
+
+        let indices = db
+            .iterate_folder_indices(BlockRange(123455, 99999999999))
+            .unwrap()
+            .unwrap()
+            .map(|a| a.unwrap().block_range)
+            .collect::<Vec<_>>();
+        assert_eq!(indices, vec![BlockRange(0, 123456)]);
+
+        let indices = db
+            .iterate_folder_indices(BlockRange(1, 123))
+            .unwrap()
+            .unwrap()
+            .map(|a| a.unwrap().block_range)
+            .collect::<Vec<_>>();
+        assert_eq!(indices, vec![BlockRange(0, 123456)]);
+
+        let indices = db.iterate_folder_indices(BlockRange(0, 0)).unwrap();
+        assert!(indices.is_none());
+
+        db.insert_folder_index_impl(
+            FolderIndex {
+                block_range: BlockRange(123456, 1234567),
+                address_filter: BloomFilter(Filter::new(8, 10000)),
+                row_group_index_offset: 0,
+            },
+            RowGroupIndex {
+                block: Vec::new(),
+                transaction: Vec::new(),
+                log: Vec::new(),
+            },
+        )
+        .unwrap();
+
+        let indices = db
+            .iterate_folder_indices(BlockRange(0, 123))
+            .unwrap()
+            .unwrap()
+            .map(|a| a.unwrap().block_range)
+            .collect::<Vec<_>>();
+        assert_eq!(indices, vec![BlockRange(0, 123456)]);
+
+        let indices = db
+            .iterate_folder_indices(BlockRange(123456, 99999999999))
+            .unwrap()
+            .unwrap()
+            .map(|a| a.unwrap().block_range)
+            .collect::<Vec<_>>();
+        assert_eq!(indices, vec![BlockRange(123456, 1234567)]);
+
+        let indices = db
+            .iterate_folder_indices(BlockRange(123455, 99999999999))
+            .unwrap()
+            .unwrap()
+            .map(|a| a.unwrap().block_range)
+            .collect::<Vec<_>>();
+        assert_eq!(
+            indices,
+            vec![BlockRange(0, 123456), BlockRange(123456, 1234567)]
+        );
+
+        let indices = db
+            .iterate_folder_indices(BlockRange(1, 123))
+            .unwrap()
+            .unwrap()
+            .map(|a| a.unwrap().block_range)
+            .collect::<Vec<_>>();
+        assert_eq!(indices, vec![BlockRange(0, 123456)]);
+
+        let indices = db.iterate_folder_indices(BlockRange(0, 0)).unwrap();
+        assert!(indices.is_none());
+
+        let folder_indices = db
+            .iterate_folder_indices(BlockRange(0, u64::MAX))
+            .unwrap()
+            .unwrap()
+            .map(|i| i.unwrap())
+            .collect::<Vec<_>>();
+
+        let rg_index = db
+            .iterate_folder_indices(BlockRange(0, u64::MAX))
+            .unwrap()
+            .unwrap()
+            .read_row_group_index(0)
+            .unwrap();
+        assert_eq!(rg_index.block.len(), 0);
+        assert_eq!(rg_index.transaction.len(), 0);
+        assert_eq!(rg_index.log.len(), 0);
+
+        let len_rg_index_first = bincode::serialize(&rg_index).unwrap();
+
+        assert_eq!(folder_indices.len(), 2);
+        assert_eq!(folder_indices[0].row_group_index_offset, 0);
+        assert_eq!(
+            folder_indices[1].row_group_index_offset as usize,
+            len_rg_index_first.len() + 4
+        );
+    }
 }

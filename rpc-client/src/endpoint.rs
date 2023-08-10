@@ -25,7 +25,7 @@ impl Endpoint {
     pub fn new(http_client: reqwest::Client, config: EndpointConfig) -> Self {
         let last_block = Arc::new(RwLock::new(None));
         let url = Arc::new(config.url);
-        let bearer_token = Arc::new(config.bearer_token);
+        let bearer_token = config.bearer_token.map(Arc::new);
 
         tokio::spawn(
             WatchHealth {
@@ -105,7 +105,7 @@ impl Endpoint {
 
 struct WatchHealth {
     url: Arc<Url>,
-    bearer_token: Arc<Option<String>>,
+    bearer_token: Option<Arc<String>>,
     http_client: reqwest::Client,
     last_block: Arc<RwLock<Option<BlockNumber>>>,
     status_refresh_interval_secs: NonZeroU64,
@@ -154,7 +154,7 @@ struct Job {
 
 struct Listen {
     url: Arc<Url>,
-    bearer_token: Arc<Option<String>>,
+    bearer_token: Option<Arc<String>>,
     http_client: reqwest::Client,
     job_rx: mpsc::Receiver<Job>,
     limit_config: LimitConfig,
@@ -243,7 +243,7 @@ impl Listen {
 
 struct SendRpcRequest {
     url: Arc<Url>,
-    bearer_token: Arc<Option<String>>,
+    bearer_token: Option<Arc<String>>,
     http_client: reqwest::Client,
     job: Job,
 }
@@ -262,7 +262,7 @@ impl SendRpcRequest {
             .http_client
             .request(Method::POST, Url::clone(&self.url));
 
-        if let Some(bearer_token) = &*self.bearer_token {
+        if let Some(bearer_token) = &self.bearer_token {
             req = req.bearer_auth(bearer_token);
         }
 
@@ -349,6 +349,7 @@ mod tests {
         let mut listen = Listen {
             url: Url::parse("http://hello.com").unwrap().into(),
             http_client: reqwest::Client::new(),
+            bearer_token: None,
             job_rx,
             limit_config: LimitConfig {
                 req_limit: 50.try_into().unwrap(),
@@ -388,6 +389,7 @@ mod tests {
         let listen = Listen {
             url: Url::parse("http://hello.com").unwrap().into(),
             http_client: reqwest::Client::new(),
+            bearer_token: None,
             job_rx,
             limit_config: LimitConfig {
                 req_limit: 50.try_into().unwrap(),

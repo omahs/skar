@@ -20,21 +20,22 @@ pub struct BlockHeader {
     pub number: BlockNumber,
     pub hash: Hash,
     pub parent_hash: Hash,
-    pub nonce: Nonce,
+    pub nonce: Option<Nonce>,
     pub sha3_uncles: Hash,
     pub logs_bloom: BloomFilter,
     pub transactions_root: Hash,
     pub state_root: Hash,
     pub receipts_root: Hash,
     pub miner: Address,
-    pub difficulty: Quantity,
-    pub total_difficulty: Quantity,
+    pub difficulty: Option<Quantity>,
+    pub total_difficulty: Option<Quantity>,
     pub extra_data: Data,
     pub size: Quantity,
     pub gas_limit: Quantity,
     pub gas_used: Quantity,
     pub timestamp: Quantity,
-    pub uncles: Box<[Hash]>,
+    pub uncles: Option<Box<[Hash]>>,
+    pub base_fee_per_gas: Option<Quantity>,
 }
 
 #[derive(Debug, Default, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -50,18 +51,21 @@ pub struct Block<Tx> {
 pub struct Transaction {
     pub block_hash: Hash,
     pub block_number: BlockNumber,
-    pub from: Address,
+    pub from: Option<Address>,
     pub gas: Quantity,
-    pub gas_price: Quantity,
+    pub gas_price: Option<Quantity>,
     pub hash: Hash,
     pub input: Data,
     pub nonce: Quantity,
     pub to: Option<Address>,
     pub transaction_index: TransactionIndex,
     pub value: Quantity,
-    pub v: Quantity,
-    pub r: Quantity,
-    pub s: Quantity,
+    pub v: Option<Quantity>,
+    pub r: Option<Quantity>,
+    pub s: Option<Quantity>,
+    pub max_priority_fee_per_gas: Option<Quantity>,
+    pub max_fee_per_gas: Option<Quantity>,
+    pub chain_id: Option<Quantity>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -80,7 +84,7 @@ pub struct TransactionReceipt {
     pub logs: Box<[Log]>,
     pub logs_bloom: BloomFilter,
     #[serde(rename = "type")]
-    pub kind: TransactionType,
+    pub kind: Option<TransactionType>,
     pub root: Option<Hash>,
     pub status: Option<TransactionStatus>,
 }
@@ -88,7 +92,7 @@ pub struct TransactionReceipt {
 #[derive(Debug, Default, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Log {
-    pub removed: bool,
+    pub removed: Option<bool>,
     pub log_index: LogIndex,
     pub transaction_index: TransactionIndex,
     pub transaction_hash: Hash,

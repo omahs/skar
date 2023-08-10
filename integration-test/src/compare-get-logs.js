@@ -1,7 +1,12 @@
 const {
   getDataFromEthArchive,
-  getLogsRequestBody,
+  getLogsRequestBodyEthArchive,
 } = require("./eth-archive-queries.js");
+
+const {
+  getDataFromSkar,
+  getLogsRequestBodySkar,
+} = require("./skar-queries.js");
 
 const { getLogsWithTxsAndBlocks } = require("./rpc-queries.js");
 
@@ -13,7 +18,6 @@ const assert = require("assert");
 //and sanitizes them for comparison
 const getCommontBlockData = (blockDataObj) => {
   const {
-    parentHash,
     sha3Uncles,
     miner,
     stateRoot,
@@ -26,7 +30,6 @@ const getCommontBlockData = (blockDataObj) => {
     gasUsed,
     timestamp,
     extraData,
-    mixHash,
     nonce,
     totalDifficulty,
     size,
@@ -34,7 +37,6 @@ const getCommontBlockData = (blockDataObj) => {
   } = blockDataObj;
 
   return {
-    parentHash,
     sha3Uncles,
     miner,
     stateRoot,
@@ -49,7 +51,6 @@ const getCommontBlockData = (blockDataObj) => {
     gasUsed,
     timestamp,
     extraData,
-    mixHash,
     nonce: ethers.toBeHex(nonce),
     totalDifficulty: ethers.toBeHex(totalDifficulty),
     size,
@@ -67,10 +68,6 @@ const getCommontTxData = (txDataObj) => {
     gas,
     value,
     input,
-    maxPriorityFeePerGas,
-    maxFeePerGas,
-    yParity,
-    chainId,
     v,
     r,
     s,
@@ -95,10 +92,6 @@ const getCommontTxData = (txDataObj) => {
     gas: ethers.toBeHex(gas),
     value: ethers.toBeHex(value),
     input,
-    maxPriorityFeePerGas,
-    maxFeePerGas,
-    yParity,
-    chainId: ethers.toBeHex(chainId),
     v: ethers.toBeHex(v),
     r: ethers.toBeHex(r),
     s: ethers.toBeHex(s),
@@ -122,7 +115,6 @@ const getCommontLogData = (logDataObj) => {
     data,
     index,
     removed,
-    topics,
     transactionHash,
     transactionIndex,
     logIndex,
@@ -134,7 +126,6 @@ const getCommontLogData = (logDataObj) => {
     address,
     data,
     removed,
-    topics,
     transactionHash,
     blockHash,
     //toBeHex will normalize numbers, strings, BigInts and
@@ -154,9 +145,16 @@ const main = async () => {
     ["0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef"],
   ];
 
+  let skarDataPromise = getDataFromSkar(
+    (from_block, to_block) =>
+      getLogsRequestBodySkar(from_block, to_block, ADDRESSES, TOPICS),
+    START_BLOCK,
+    END_BLOCK,
+  );
+
   let ethArchiveDataPromise = getDataFromEthArchive(
     (fromBlock, toBlock) =>
-      getLogsRequestBody(fromBlock, toBlock, ADDRESSES, TOPICS),
+      getLogsRequestBodyEthArchive(fromBlock, toBlock, ADDRESSES, TOPICS),
     START_BLOCK,
     END_BLOCK
   );
@@ -168,10 +166,17 @@ const main = async () => {
     TOPICS
   );
 
-  const [ethArchiveData, rpcData] = await Promise.all([
+  const [skarData, ethArchiveData, rpcData] = await Promise.all([
+    skarDataPromise,
     ethArchiveDataPromise,
     rpcDataPromise,
   ]);
+
+  const skarComparisonData = {
+    blocks: [],
+    transactions: [],
+    logs: [],
+  };
 
   const ethArchiveComparisonData = {
     blocks: [],
@@ -184,6 +189,32 @@ const main = async () => {
     transactions: [],
     logs: [],
   };
+
+  const camelize = item => {
+    if (Array.isArray(item)) {
+      return item.map(el => camelize(el));
+    } else if (typeof item === 'function' || item !== Object(item)) {
+      return item;
+    }
+    return Object.fromEntries(
+      Object.entries(item).map(([key, value]) => [
+        key.replace(/([-_][a-z])/gi, c => c.toUpperCase().replace(/[-_]/g, '')),
+        camelize(value),
+      ]),
+    );
+  };
+
+  skarData.forEach((data) => {
+    data.logs.forEach((log) => {
+      skarComparisonData.logs.push(getCommontLogData(camelize(log)));
+    });
+    data.transactions.forEach((tx) => {
+      skarComparisonData.transactions.push(getCommontTxData(camelize(tx)));
+    });
+    data.blocks.forEach((block) => {
+      skarComparisonData.blocks.push(getCommontBlockData(camelize(block)));
+    });
+  });
 
   ethArchiveData.forEach((outerArr) => {
     outerArr.forEach((blockData) => {
@@ -212,8 +243,11 @@ const main = async () => {
     rpcComparisonData.logs.push(getCommontLogData(log));
   });
 
+  assert.equal(rpcComparisonData.blocks.length, skarComparisonData.blocks.length);
+
   assert.deepStrictEqual(ethArchiveComparisonData, rpcComparisonData);
-  console.log("Both queries match");
+  assert.deepStrictEqual(ethArchiveComparisonData, skarComparisonData);
+  console.log("All queries match");
 };
 
 main();

@@ -302,3 +302,382 @@ const LOG_QUERY_FIELDS: &[&str] = &[
     "topic2",
     "topic3",
 ];
+
+#[cfg(test)]
+mod tests {
+    use sbbf_rs_safe::Filter;
+
+    use crate::{
+        db::BloomFilter,
+        types::{FieldSelection, LogSelection, Query, TransactionSelection},
+    };
+
+    use super::*;
+
+    #[test]
+    fn test_skip_block_row_group() {
+        let can_skip = |from_block: u64,
+                        to_block: Option<u64>,
+                        min_block_num: u64,
+                        max_block_num: u64|
+         -> bool {
+            can_skip_block_row_group(
+                &QueryContext {
+                    query: Query {
+                        logs: Vec::new(),
+                        transactions: Vec::new(),
+                        include_all_blocks: true,
+                        field_selection: FieldSelection::default(),
+                        from_block,
+                        to_block,
+                    },
+                    transaction_set: BTreeSet::new(),
+                    block_set: BTreeSet::new(),
+                },
+                &BlockRowGroupIndex {
+                    min_block_num,
+                    max_block_num,
+                },
+            )
+        };
+
+        assert!(!can_skip(0, None, 1, 1));
+        assert!(!can_skip(1, None, 1, 1));
+        assert!(can_skip(1, Some(2), 2, 2));
+        assert!(can_skip(5, None, 2, 2));
+        assert!(!can_skip(2, None, 2, 2));
+        assert!(can_skip(3, None, 2, 2));
+    }
+
+    #[test]
+    fn test_skip_block_row_group_with_set() {
+        let can_skip = |from_block: u64,
+                        to_block: Option<u64>,
+                        min_block_num: u64,
+                        max_block_num: u64,
+                        block_set: Vec<u64>|
+         -> bool {
+            can_skip_block_row_group(
+                &QueryContext {
+                    query: Query {
+                        logs: Vec::new(),
+                        transactions: Vec::new(),
+                        include_all_blocks: false,
+                        field_selection: FieldSelection::default(),
+                        from_block,
+                        to_block,
+                    },
+                    transaction_set: BTreeSet::new(),
+                    block_set: block_set.into_iter().collect(),
+                },
+                &BlockRowGroupIndex {
+                    min_block_num,
+                    max_block_num,
+                },
+            )
+        };
+
+        assert!(!can_skip(0, None, 1, 1, vec![1, 15]));
+        assert!(can_skip(0, None, 1, 1, vec![2, 15]));
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn can_skip_tx_rg_test(
+        from_block: u64,
+        to_block: Option<u64>,
+        transactions: Vec<TransactionSelection>,
+        min_block_num: u64,
+        max_block_num: u64,
+        from_addrs: Vec<&[u8]>,
+        to_addrs: Vec<&[u8]>,
+        transaction_set: Vec<(u64, u64)>,
+    ) -> bool {
+        can_skip_tx_row_group(
+            &QueryContext {
+                query: Query {
+                    logs: Vec::new(),
+                    transactions,
+                    include_all_blocks: false,
+                    field_selection: FieldSelection::default(),
+                    from_block,
+                    to_block,
+                },
+                transaction_set: transaction_set.into_iter().collect(),
+                block_set: BTreeSet::new(),
+            },
+            &TransactionRowGroupIndex {
+                min_block_num,
+                max_block_num,
+                from_address_filter: BloomFilter(from_addrs.iter().fold(
+                    Filter::new(100, from_addrs.len()),
+                    |mut filter, addr| {
+                        filter.insert_hash(wyhash(addr, 0));
+                        filter
+                    },
+                )),
+                to_address_filter: BloomFilter(to_addrs.iter().fold(
+                    Filter::new(100, to_addrs.len()),
+                    |mut filter, addr| {
+                        filter.insert_hash(wyhash(addr, 0));
+                        filter
+                    },
+                )),
+            },
+        )
+    }
+
+    #[test]
+    fn test_skip_tx_row_group() {
+        assert!(can_skip_tx_rg_test(
+            0,
+            Some(10),
+            Vec::new(),
+            11,
+            23,
+            vec![],
+            vec![],
+            Vec::new(),
+        ));
+        assert!(!can_skip_tx_rg_test(
+            0,
+            Some(10),
+            vec![TransactionSelection {
+                from: vec![],
+                to: vec![],
+                sighash: vec![],
+                status: None,
+            }],
+            9,
+            23,
+            vec![b"123123"],
+            vec![],
+            Vec::new(),
+        ));
+        assert!(can_skip_tx_rg_test(
+            0,
+            Some(5),
+            vec![TransactionSelection {
+                from: vec![],
+                to: vec![],
+                sighash: vec![],
+                status: None,
+            }],
+            9,
+            23,
+            vec![b"123123"],
+            vec![],
+            Vec::new(),
+        ));
+        assert!(!can_skip_tx_rg_test(
+            0,
+            None,
+            vec![TransactionSelection {
+                from: vec![],
+                to: vec![],
+                sighash: vec![],
+                status: None,
+            }],
+            9,
+            23,
+            vec![b"123123"],
+            vec![],
+            Vec::new(),
+        ));
+        assert!(can_skip_tx_rg_test(
+            0,
+            None,
+            vec![TransactionSelection {
+                from: vec![],
+                to: vec![
+                    hex_literal::hex!("48bBf1c68037BF35b0eB090f1B5E0fa52F690502")
+                        .try_into()
+                        .unwrap()
+                ],
+                sighash: vec![],
+                status: None,
+            }],
+            9,
+            23,
+            vec![&hex_literal::hex!(
+                "48bBf1c68037BF35b0eB090f1B5E0fa52F690502"
+            )],
+            vec![],
+            Vec::new(),
+        ));
+        assert!(!can_skip_tx_rg_test(
+            0,
+            None,
+            vec![TransactionSelection {
+                from: vec![
+                    hex_literal::hex!("48bBf1c68037BF35b0eB090f1B5E0fa52F690502")
+                        .try_into()
+                        .unwrap()
+                ],
+                to: vec![],
+                sighash: vec![],
+                status: None,
+            }],
+            9,
+            23,
+            vec![&hex_literal::hex!(
+                "48bBf1c68037BF35b0eB090f1B5E0fa52F690502"
+            )],
+            vec![],
+            Vec::new(),
+        ));
+        assert!(!can_skip_tx_rg_test(
+            0,
+            None,
+            vec![TransactionSelection {
+                from: vec![],
+                to: vec![
+                    hex_literal::hex!("48bBf1c68037BF35b0eB090f1B5E0fa52F690502")
+                        .try_into()
+                        .unwrap()
+                ],
+                sighash: vec![],
+                status: None,
+            }],
+            9,
+            23,
+            vec![],
+            vec![&hex_literal::hex!(
+                "48bBf1c68037BF35b0eB090f1B5E0fa52F690502"
+            )],
+            Vec::new(),
+        ));
+        assert!(!can_skip_tx_rg_test(
+            0,
+            None,
+            vec![TransactionSelection {
+                from: vec![],
+                to: vec![
+                    hex_literal::hex!("48bBf1c68037BF35b0eB090f1B5E0fa52F690502")
+                        .try_into()
+                        .unwrap()
+                ],
+                sighash: vec![],
+                status: None,
+            }],
+            9,
+            23,
+            vec![],
+            vec![],
+            vec![(12, 5)],
+        ));
+        assert!(can_skip_tx_rg_test(
+            0,
+            None,
+            vec![TransactionSelection {
+                from: vec![],
+                to: vec![
+                    hex_literal::hex!("48bBf1c68037BF35b0eB090f1B5E0fa52F690502")
+                        .try_into()
+                        .unwrap()
+                ],
+                sighash: vec![],
+                status: None,
+            }],
+            9,
+            23,
+            vec![],
+            vec![],
+            vec![],
+        ));
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn can_skip_log_rg_test(
+        from_block: u64,
+        to_block: Option<u64>,
+        logs: Vec<LogSelection>,
+        min_block_num: u64,
+        max_block_num: u64,
+        addrs: Vec<&[u8]>,
+    ) -> bool {
+        can_skip_log_row_group(
+            &QueryContext {
+                query: Query {
+                    logs,
+                    transactions: Vec::new(),
+                    include_all_blocks: false,
+                    field_selection: FieldSelection::default(),
+                    from_block,
+                    to_block,
+                },
+                transaction_set: BTreeSet::new(),
+                block_set: BTreeSet::new(),
+            },
+            &LogRowGroupIndex {
+                min_block_num,
+                max_block_num,
+                address_filter: BloomFilter(addrs.iter().fold(
+                    Filter::new(100, addrs.len()),
+                    |mut filter, addr| {
+                        filter.insert_hash(wyhash(addr, 0));
+                        filter
+                    },
+                )),
+            },
+        )
+    }
+
+    #[test]
+    fn test_skip_log_row_group() {
+        assert!(can_skip_log_rg_test(
+            0,
+            Some(10),
+            Vec::new(),
+            11,
+            23,
+            vec![],
+        ));
+        assert!(!can_skip_log_rg_test(
+            0,
+            Some(15),
+            vec![LogSelection {
+                address: vec![
+                    hex_literal::hex!("48bBf1c68037BF35b0eB090f1B5E0fa52F690502")
+                        .try_into()
+                        .unwrap()
+                ],
+                topics: Default::default(),
+            }],
+            11,
+            23,
+            vec![
+                &hex_literal::hex!("48bBf1c68037BF35b0eB090f1B5E0fa52F690502"),
+                &hex_literal::hex!("11bBf1c68037BF35b0eB090f1B5E0fa52F690402")
+            ],
+        ));
+        assert!(can_skip_log_rg_test(
+            0,
+            Some(3),
+            vec![LogSelection {
+                address: vec![
+                    hex_literal::hex!("48bBf1c68037BF35b0eB090f1B5E0fa52F690502")
+                        .try_into()
+                        .unwrap()
+                ],
+                topics: Default::default(),
+            }],
+            11,
+            23,
+            vec![
+                &hex_literal::hex!("48bBf1c68037BF35b0eB090f1B5E0fa52F690502"),
+                &hex_literal::hex!("11bBf1c68037BF35b0eB090f1B5E0fa52F690402")
+            ],
+        ));
+        assert!(!can_skip_log_rg_test(
+            0,
+            Some(12),
+            vec![LogSelection {
+                address: vec![],
+                topics: Default::default(),
+            }],
+            11,
+            23,
+            vec![],
+        ));
+    }
+}

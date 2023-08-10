@@ -15,7 +15,6 @@ pub struct Config {
 #[derive(Serialize, Deserialize, Clone, Copy)]
 pub struct QueryConfig {
     pub time_limit_ms: u64,
-    pub parquet_folder_batch_size: usize,
     pub max_concurrent_queries: usize,
 }
 

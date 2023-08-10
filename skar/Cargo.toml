@@ -22,7 +22,7 @@ axum = "0.6"
 tower = "0.4"
 tower-http = { version = "0.4", features = ["compression-gzip"] }
 serde_json = "1"
-hex = "0.4"
+prefix-hex = "0.7.1"
 ethbloom = "0.13"
 arrow2 = { version = "0.17.3", features = ["io_parquet", "io_parquet_lz4", "compute", "io_json"] }
 reth-libmdbx = { git = "https://github.com/paradigmxyz/reth" }
@@ -31,3 +31,13 @@ page_size = "0.5.0"
 
 skar-format = { path = "../format" }
 skar-ingest = { path = "../ingest" }
+
+[dev-dependencies.uuid]
+version = "1.4.1"
+features = [
+    "v4",                # Lets you generate random UUIDs
+    "fast-rng",          # Use a faster (but still sufficiently random) RNG
+]
+
+[dev-dependencies]
+hex-literal = "0.4"

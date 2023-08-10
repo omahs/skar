@@ -15,6 +15,12 @@ impl<const N: usize> Default for FixedSizeData<N> {
     }
 }
 
+impl<const N: usize> AsRef<[u8]> for FixedSizeData<N> {
+    fn as_ref(&self) -> &[u8] {
+        &*self.0
+    }
+}
+
 impl<const N: usize> From<[u8; N]> for FixedSizeData<N> {
     fn from(buf: [u8; N]) -> Self {
         Self(Box::new(buf))

@@ -59,6 +59,8 @@ impl Ingester {
                 async move {
                     let end_block = cmp::min(config.to_block, start_block + step);
 
+                    log::debug!("ingesting {}-{}", start_block, end_block);
+
                     let req: RpcRequest = (start_block..end_block)
                         .map(|block_num| GetBlockByNumber(block_num.into()))
                         .collect::<Vec<_>>()

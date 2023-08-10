@@ -36,21 +36,23 @@ pub fn block_header() -> SchemaRef {
     Schema::from(vec![
         Field::new("number", DataType::UInt64, false),
         Field::new("hash", hash_dt(), false),
-        Field::new("nonce", DataType::Binary, false),
+        Field::new("parent_hash", hash_dt(), false),
+        Field::new("nonce", DataType::Binary, true),
         Field::new("sha3_uncles", hash_dt(), false),
         Field::new("logs_bloom", DataType::Binary, false),
         Field::new("transactions_root", hash_dt(), false),
         Field::new("state_root", hash_dt(), false),
         Field::new("receipts_root", hash_dt(), false),
         Field::new("miner", addr_dt(), false),
-        Field::new("difficulty", quantity_dt(), false),
-        Field::new("total_difficulty", quantity_dt(), false),
+        Field::new("difficulty", quantity_dt(), true),
+        Field::new("total_difficulty", quantity_dt(), true),
         Field::new("extra_data", DataType::Binary, false),
         Field::new("size", quantity_dt(), false),
         Field::new("gas_limit", quantity_dt(), false),
         Field::new("gas_used", quantity_dt(), false),
         Field::new("timestamp", quantity_dt(), false),
-        Field::new("uncles", DataType::Binary, false),
+        Field::new("uncles", DataType::Binary, true),
+        Field::new("base_fee_per_gas", quantity_dt(), true),
     ])
     .into()
 }
@@ -59,24 +61,27 @@ pub fn transaction() -> SchemaRef {
     Schema::from(vec![
         Field::new("block_hash", hash_dt(), false),
         Field::new("block_number", DataType::UInt64, false),
-        Field::new("from", addr_dt(), false),
+        Field::new("from", addr_dt(), true),
         Field::new("gas", quantity_dt(), false),
-        Field::new("gas_price", quantity_dt(), false),
+        Field::new("gas_price", quantity_dt(), true),
         Field::new("hash", hash_dt(), false),
         Field::new("input", DataType::Binary, false),
         Field::new("nonce", quantity_dt(), false),
         Field::new("to", addr_dt(), true),
         Field::new("transaction_index", DataType::UInt64, false),
         Field::new("value", quantity_dt(), false),
-        Field::new("v", quantity_dt(), false),
-        Field::new("r", quantity_dt(), false),
-        Field::new("s", quantity_dt(), false),
+        Field::new("v", quantity_dt(), true),
+        Field::new("r", quantity_dt(), true),
+        Field::new("s", quantity_dt(), true),
+        Field::new("max_priority_fee_per_gas", quantity_dt(), true),
+        Field::new("max_fee_per_gas", quantity_dt(), true),
+        Field::new("chain_id", quantity_dt(), true),
         Field::new("cumulative_gas_used", quantity_dt(), false),
         Field::new("effective_gas_price", quantity_dt(), false),
         Field::new("gas_used", quantity_dt(), false),
         Field::new("contract_address", addr_dt(), true),
         Field::new("logs_bloom", DataType::Binary, false),
-        Field::new("type", DataType::UInt8, false),
+        Field::new("type", DataType::UInt8, true),
         Field::new("root", hash_dt(), true),
         Field::new("status", DataType::UInt8, true),
         Field::new("sighash", DataType::Binary, true),
@@ -86,7 +91,7 @@ pub fn transaction() -> SchemaRef {
 
 pub fn log() -> SchemaRef {
     Schema::from(vec![
-        Field::new("removed", DataType::Boolean, false),
+        Field::new("removed", DataType::Boolean, true),
         Field::new("log_index", DataType::UInt64, false),
         Field::new("transaction_index", DataType::UInt64, false),
         Field::new("transaction_hash", hash_dt(), false),
@@ -111,6 +116,7 @@ pub struct Batches {
 pub fn data_to_batches(mut data: BatchData) -> Batches {
     let mut b_number = UInt64Vec::new();
     let mut b_hash = hash_builder();
+    let mut b_parent_hash = hash_builder();
     let mut b_nonce = MutableBinaryArray::<i32>::new();
     let mut b_sha3_uncles = hash_builder();
     let mut b_logs_bloom = MutableBinaryArray::<i32>::new();
@@ -126,6 +132,7 @@ pub fn data_to_batches(mut data: BatchData) -> Batches {
     let mut b_gas_used = quantity_builder();
     let mut b_timestamp = quantity_builder();
     let mut b_uncles = MutableBinaryArray::<i32>::new();
+    let mut b_base_fee_per_gas = quantity_builder();
 
     let mut tx_block_hash = hash_builder();
     let mut tx_block_number = UInt64Vec::new();
@@ -141,6 +148,9 @@ pub fn data_to_batches(mut data: BatchData) -> Batches {
     let mut tx_v = quantity_builder();
     let mut tx_r = quantity_builder();
     let mut tx_s = quantity_builder();
+    let mut tx_max_priority_fee_per_gas = quantity_builder();
+    let mut tx_max_fee_per_gas = quantity_builder();
+    let mut tx_chain_id = quantity_builder();
     let mut tx_cumulative_gas_used = quantity_builder();
     let mut tx_effective_gas_price = quantity_builder();
     let mut tx_gas_used = quantity_builder();
@@ -180,30 +190,33 @@ pub fn data_to_batches(mut data: BatchData) -> Batches {
 
         tx_block_hash.push(Some(tx.block_hash.as_ref()));
         tx_block_number.push(Some(tx.block_number.into()));
-        tx_from.push(Some(tx.from.as_ref()));
+        tx_from.push(tx.from.map(|d| **d));
         tx_gas.push(Some(&*tx.gas));
-        tx_gas_price.push(Some(&*tx.gas_price));
+        tx_gas_price.push(tx.gas_price.as_ref());
         tx_hash.push(Some(tx.hash.as_ref()));
         tx_input.push(Some(tx.input.as_ref()));
         tx_nonce.push(Some(&*tx.nonce));
         tx_to.push(tx.to.as_ref().map(|s| s.as_slice()));
         tx_transaction_index.push(Some(tx.transaction_index.into()));
         tx_value.push(Some(tx.value.as_ref()));
-        tx_v.push(Some(&*tx.v));
-        tx_r.push(Some(&*tx.r));
-        tx_s.push(Some(&*tx.s));
+        tx_v.push(tx.v.as_ref());
+        tx_r.push(tx.r.as_ref());
+        tx_s.push(tx.s.as_ref());
+        tx_max_priority_fee_per_gas.push(tx.max_priority_fee_per_gas.as_ref());
+        tx_max_fee_per_gas.push(tx.max_fee_per_gas.as_ref());
+        tx_chain_id.push(tx.chain_id.as_ref());
         tx_cumulative_gas_used.push(Some(&*receipt.cumulative_gas_used));
         tx_effective_gas_price.push(Some(&*receipt.effective_gas_price));
         tx_gas_used.push(Some(&*receipt.gas_used));
         tx_contract_address.push(receipt.contract_address.as_ref().map(|s| s.as_slice()));
         tx_logs_bloom.push(Some(receipt.logs_bloom.as_ref()));
-        tx_type.push(Some(receipt.kind.to_u8()));
+        tx_type.push(receipt.kind.map(|k| k.to_u8()));
         tx_root.push(receipt.root.as_ref().map(|s| s.as_slice()));
         tx_status.push(receipt.status.map(|s| s.to_u8()));
         tx_sighash.push(tx.input.get(0..4));
 
         for log in receipt.logs.iter() {
-            log_removed.push(Some(log.removed));
+            log_removed.push(log.removed);
             log_log_index.push(Some(log.log_index.into()));
             log_transaction_index.push(Some(log.transaction_index.into()));
             log_transaction_hash.push(Some(log.transaction_hash.as_ref()));
@@ -223,32 +236,34 @@ pub fn data_to_batches(mut data: BatchData) -> Batches {
     for block in data.blocks.into_iter() {
         b_number.push(Some(block.header.number.into()));
         b_hash.push(Some(block.header.hash.as_slice()));
-        b_nonce.push(Some(block.header.nonce.as_slice()));
+        b_parent_hash.push(Some(block.header.parent_hash.as_slice()));
+        b_nonce.push(block.header.nonce.map(|d| **d));
         b_sha3_uncles.push(Some(block.header.sha3_uncles.as_slice()));
         b_logs_bloom.push(Some(block.header.logs_bloom.as_slice()));
         b_transactions_root.push(Some(block.header.transactions_root.as_slice()));
         b_state_root.push(Some(block.header.state_root.as_slice()));
         b_receipts_root.push(Some(block.header.receipts_root.as_slice()));
         b_miner.push(Some(block.header.miner.as_slice()));
-        b_difficulty.push(Some(&*block.header.difficulty));
-        b_total_difficulty.push(Some(&*block.header.total_difficulty));
+        b_difficulty.push(block.header.difficulty.as_ref());
+        b_total_difficulty.push(block.header.total_difficulty.as_ref());
         b_extra_data.push(Some(&*block.header.extra_data));
         b_size.push(Some(&*block.header.size));
         b_gas_limit.push(Some(&*block.header.gas_limit));
         b_gas_used.push(Some(&*block.header.gas_used));
         b_timestamp.push(Some(&*block.header.timestamp));
-        b_uncles.push(Some(block.header.uncles.iter().fold(
-            Vec::new(),
-            |mut v, b| {
+        b_uncles.push(block.header.uncles.map(|uncles| {
+            uncles.iter().fold(Vec::new(), |mut v, b| {
                 v.extend_from_slice(b.as_slice());
                 v
-            },
-        )));
+            })
+        }));
+        b_base_fee_per_gas.push(block.header.base_fee_per_gas.as_ref());
     }
 
     let blocks = ArrowChunk::try_new(vec![
         b_number.as_box(),
         b_hash.as_box(),
+        b_parent_hash.as_box(),
         b_nonce.as_box(),
         b_sha3_uncles.as_box(),
         b_logs_bloom.as_box(),
@@ -264,6 +279,7 @@ pub fn data_to_batches(mut data: BatchData) -> Batches {
         b_gas_used.as_box(),
         b_timestamp.as_box(),
         b_uncles.as_box(),
+        b_base_fee_per_gas.as_box(),
     ])
     .unwrap();
 
@@ -282,6 +298,9 @@ pub fn data_to_batches(mut data: BatchData) -> Batches {
         tx_v.as_box(),
         tx_r.as_box(),
         tx_s.as_box(),
+        tx_max_priority_fee_per_gas.as_box(),
+        tx_max_fee_per_gas.as_box(),
+        tx_chain_id.as_box(),
         tx_cumulative_gas_used.as_box(),
         tx_effective_gas_price.as_box(),
         tx_gas_used.as_box(),
