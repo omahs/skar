@@ -183,7 +183,7 @@ impl Iterator for QueryResultIterator {
 
         let query_result = execute_query(&data_provider, &pruned_query).map(|data| QueryResult {
             data,
-            next_block: folder_index.block_range.1,
+            next_block: next_block(folder_index.block_range.1, self.query.to_block),
         });
 
         Some(query_result)
