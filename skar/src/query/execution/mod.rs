@@ -395,3 +395,119 @@ fn set_bool_array(len: usize) -> BooleanArray {
 fn unset_bool_array(len: usize) -> BooleanArray {
     BooleanArray::new(DataType::Boolean, Bitmap::new_zeroed(len), None)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_build_range_filter() {
+        let filter = build_range_filter(
+            &UInt64Array::from_slice([3, 0, 0, 1, 6, 9, 2, 2, 0]),
+            &Query {
+                from_block: 1,
+                to_block: Some(3),
+                transactions: Vec::new(),
+                logs: Vec::new(),
+                field_selection: Default::default(),
+                include_all_blocks: false,
+            },
+        );
+
+        assert_eq!(
+            filter.into_iter().collect::<Vec<Option<bool>>>(),
+            vec![
+                Some(false),
+                Some(false),
+                Some(false),
+                Some(true),
+                Some(false),
+                Some(false),
+                Some(true),
+                Some(true),
+                Some(false),
+            ]
+        );
+    }
+
+    #[test]
+    fn test_in_set_u64() {
+        let set = [3, 1, 6, 9, 2, 2].into_iter().collect::<BTreeSet<_>>();
+
+        let filter = in_set_u64(&UInt64Array::from_slice([3, 0, 0, 1, 6, 9, 2, 2, 0]), &set);
+
+        assert_eq!(
+            filter.into_iter().collect::<Vec<Option<bool>>>(),
+            vec![
+                Some(true),
+                Some(false),
+                Some(false),
+                Some(true),
+                Some(true),
+                Some(true),
+                Some(true),
+                Some(true),
+                Some(false),
+            ]
+        );
+    }
+
+    #[test]
+    fn test_in_set_u64_double() {
+        let set = [(3, 1), (6, 9), (2, 2)]
+            .into_iter()
+            .collect::<BTreeSet<_>>();
+
+        let filter = in_set_u64_double(
+            &UInt64Array::from_slice([3, 1, 6, 9, 2, 2]),
+            &UInt64Array::from_slice([1, 3, 9, 6, 1, 2]),
+            &set,
+        );
+
+        assert_eq!(
+            filter.into_iter().collect::<Vec<Option<bool>>>(),
+            vec![
+                Some(true),
+                Some(false),
+                Some(true),
+                Some(false),
+                Some(false),
+                Some(true),
+            ]
+        );
+    }
+
+    #[test]
+    fn test_combine_validities() {
+        let left = Bitmap::from_u8_vec(vec![0xff, 0x00], 16);
+        let right = Bitmap::from_u8_vec(vec![0xf0, 0xff], 16);
+
+        let expected = Bitmap::from_u8_vec(vec![0xf0, 0x00], 16);
+
+        let res = combine_validities(Some(&left), Some(&right)).unwrap();
+
+        assert_eq!(res, expected);
+    }
+
+    #[test]
+    fn test_set_bool_array() {
+        let arr = set_bool_array(31);
+
+        for val in arr.iter() {
+            assert!(val.unwrap());
+        }
+
+        assert_eq!(arr.len(), 31);
+    }
+
+    #[test]
+    fn test_unset_bool_array() {
+        let arr = unset_bool_array(69);
+
+        for val in arr.iter() {
+            assert!(!val.unwrap());
+        }
+
+        assert_eq!(arr.len(), 69);
+    }
+}

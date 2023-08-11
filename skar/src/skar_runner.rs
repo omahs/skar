@@ -92,7 +92,7 @@ impl Write {
                     .await
                     .context("create parquet directory")?;
 
-                write_folder(&self.state, &temp_path, &self.parquet_config)
+                write_folder(&self.state.in_mem.load(), &temp_path, &self.parquet_config)
                     .await
                     .context("write temp parquet folder")?;
 

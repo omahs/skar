@@ -3,7 +3,7 @@ use std::{cmp, fs, path::Path, sync::Arc};
 use crate::{
     config::{ParquetConfig, TableConfig},
     schema,
-    state::{ArrowChunk, State},
+    state::{ArrowChunk, InMemory},
 };
 use anyhow::{anyhow, Context, Error, Result};
 use arrow2::{
@@ -148,9 +148,11 @@ fn lexsort_chunk(sort_indices: &[usize], chunk: &ArrowChunk) -> Result<ArrowChun
     Ok(ArrowChunk::new(cols))
 }
 
-pub(crate) async fn write_folder(state: &State, path: &Path, cfg: &ParquetConfig) -> Result<()> {
-    let in_mem = state.in_mem.load_full();
-
+pub(crate) async fn write_folder(
+    in_mem: &InMemory,
+    path: &Path,
+    cfg: &ParquetConfig,
+) -> Result<()> {
     let blocks = {
         let mut path = path.to_owned();
         path.push("blocks.parquet");

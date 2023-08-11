@@ -7,6 +7,8 @@ mod schema;
 mod server;
 mod skar_runner;
 mod state;
+#[cfg(test)]
+mod tests;
 mod types;
 mod validate_parquet;
 mod write_parquet;
