@@ -6,12 +6,14 @@ use crate::{
 };
 use anyhow::{Context, Result};
 use arrow2::{
-    array::{BinaryArray, BooleanArray, MutableBooleanArray, UInt64Array, UInt8Array},
+    array::{Array, BinaryArray, BooleanArray, MutableBooleanArray, UInt64Array, UInt8Array},
     bitmap::{Bitmap, MutableBitmap},
+    chunk::Chunk,
     compute,
     datatypes::{DataType, Schema},
     scalar::PrimitiveScalar,
 };
+use rayon::prelude::*;
 
 use super::data_provider::{ArrowBatch, DataProvider};
 
@@ -76,7 +78,7 @@ fn query_logs(
             log_selections_to_filter(&batch, &query.logs).context("build selections filter")?;
         let filter = compute::boolean::and(&range_filter, &selections_filter);
 
-        batch.chunk = compute::filter::filter_chunk(&batch.chunk, &filter)
+        batch.chunk = filter_chunk(&batch.chunk, &filter)
             .map(Arc::new)
             .context("filter record batch")?;
 
@@ -99,6 +101,19 @@ fn query_logs(
     }
 
     Ok(res)
+}
+
+pub fn filter_chunk(
+    columns: &Chunk<Box<dyn Array>>,
+    filter_values: &BooleanArray,
+) -> Result<Chunk<Box<dyn Array>>> {
+    let arrays = columns.arrays();
+
+    let filter = compute::filter::build_filter(filter_values).context("build filter fn")?;
+
+    let filtered_arrays = arrays.par_iter().map(|a| filter(a.as_ref())).collect();
+
+    Chunk::try_new(filtered_arrays).context("build chunk")
 }
 
 fn log_selections_to_filter(
