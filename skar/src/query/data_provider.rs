@@ -1,7 +1,13 @@
 use std::{collections::BTreeSet, fs::File, path::PathBuf, sync::Arc};
 
 use anyhow::{anyhow, Context, Result};
-use arrow2::{datatypes::SchemaRef, io::parquet};
+use arrow2::{
+    array::Array,
+    chunk::Chunk,
+    datatypes::SchemaRef,
+    io::parquet::{self, read::ArrayIter},
+};
+use rayon::prelude::*;
 use wyhash::wyhash;
 
 use crate::{
@@ -101,6 +107,15 @@ pub struct ParquetDataProvider {
     pub rg_index: RowGroupIndex,
 }
 
+fn deserialize_parallel(iters: &mut [ArrayIter<'static>]) -> Result<Chunk<Box<dyn Array>>> {
+    let arrays = iters
+        .par_iter_mut()
+        .map(|iter| iter.next().transpose().context("decode col"))
+        .collect::<Result<Vec<_>>>()?;
+
+    Chunk::try_new(arrays.into_iter().map(|x| x.unwrap()).collect()).context("build arrow chunk")
+}
+
 impl ParquetDataProvider {
     fn load_table(
         &self,
@@ -124,14 +139,29 @@ impl ParquetDataProvider {
             .enumerate()
             .filter(|(index, _)| row_groups.contains(index))
             .map(|(_, row_group)| row_group)
-            .collect();
+            .collect::<Vec<_>>();
 
-        let chunks =
-            parquet::read::FileReader::new(reader, row_groups, schema.clone(), None, None, None);
+        let mut chunks = Vec::new();
 
-        let chunks = chunks
-            .map(|chunk| chunk.context("read row group").map(Arc::new))
-            .collect::<Result<Vec<_>>>()?;
+        for rg in row_groups {
+            let chunk_size = usize::MAX;
+
+            let mut columns = parquet::read::read_columns_many(
+                &mut reader,
+                &rg,
+                schema.fields.clone(),
+                Some(chunk_size),
+                None,
+                None,
+            )
+            .context("read columns")?;
+            let mut num_rows = rg.num_rows();
+            while num_rows > 0 {
+                num_rows = num_rows.saturating_sub(chunk_size);
+                let chunk = deserialize_parallel(&mut columns).context("deserialize chunk")?;
+                chunks.push(Arc::new(chunk));
+            }
+        }
 
         let schema_ref = Arc::new(schema);
 
