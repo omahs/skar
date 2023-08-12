@@ -1,4 +1,4 @@
-use std::{collections::BTreeSet, fs::File, path::PathBuf, sync::Arc};
+use std::{collections::BTreeSet, path::PathBuf, sync::Arc};
 
 use anyhow::{anyhow, Context, Result};
 use arrow2::{
@@ -12,6 +12,7 @@ use wyhash::wyhash;
 
 use crate::{
     db::{BlockRowGroupIndex, LogRowGroupIndex, RowGroupIndex, TransactionRowGroupIndex},
+    open_file_reader::open_file_reader,
     schema,
     state::{ArrowChunk, InMemory},
     types::QueryContext,
@@ -126,7 +127,8 @@ impl ParquetDataProvider {
         let mut path = self.path.clone();
         path.push(format!("{table_name}.parquet"));
 
-        let mut reader = File::open(&path).context("open parquet file")?;
+        let mut reader = open_file_reader(&path).context("open parquet file")?;
+
         let metadata =
             parquet::read::read_metadata(&mut reader).context("read parquet metadata")?;
         let schema = parquet::read::infer_schema(&metadata).context("infer parquet schema")?;

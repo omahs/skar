@@ -2,6 +2,7 @@ mod args;
 mod build_parquet_idx;
 mod config;
 mod db;
+mod open_file_reader;
 mod query;
 mod schema;
 mod server;

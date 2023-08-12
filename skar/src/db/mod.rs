@@ -17,6 +17,8 @@ pub use types::{
     TransactionRowGroupIndex,
 };
 
+use crate::open_file_reader::{open_file, open_file_reader};
+
 pub struct Db {
     env: Environment<NoWriteMap>,
     folder_index_path: PathBuf,
@@ -219,7 +221,7 @@ impl Db {
         let txn = self.env.begin_ro_txn().context("begin read only txn")?;
         let db = txn.open_db(None).context("open default db from txn")?;
 
-        let mut folder_index = match File::open(&self.folder_index_path) {
+        let mut folder_index = match open_file(&self.folder_index_path) {
             Ok(folder_index) => BufReader::new(folder_index),
             Err(e) => {
                 if e.kind() == ErrorKind::NotFound {
@@ -230,9 +232,8 @@ impl Db {
             }
         };
 
-        let row_group_index = BufReader::new(
-            File::open(&self.row_group_index_path).context("open row group index file")?,
-        );
+        let row_group_index =
+            open_file_reader(&self.row_group_index_path).context("open row group index file")?;
 
         let mut cursor = txn.cursor(&db).context("open cursor")?;
 
