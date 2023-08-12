@@ -142,9 +142,9 @@ const getDataFromSkar = async (makeRequestBody, fromBlock, toBlockInclusive) => 
     nextBlock = respBody.next_block;
     data = [...data, ...respBody.data];
     console.log(
-      `scanned ${nextBlock - req.from_block} blocks in ${totalTime} ms`
+      `[skar]: scanned ${nextBlock - req.from_block} blocks in ${totalTime} ms`
     );
-    console.log(`nextBlock: ${nextBlock}`);
+    console.log(`[skar]: nextBlock: ${nextBlock}`);
     total += totalTime;
     if (toBlock <= nextBlock) {
       break;
@@ -152,7 +152,7 @@ const getDataFromSkar = async (makeRequestBody, fromBlock, toBlockInclusive) => 
     req.fromBlock = nextBlock;
   }
 
-  console.log(`Finished skar sync in ${total} milliseconds`);
+  console.log(`[skar]: Finished skar sync in ${total} milliseconds`);
 
   return data;
 };

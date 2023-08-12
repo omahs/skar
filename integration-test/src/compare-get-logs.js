@@ -136,34 +136,44 @@ const getCommontLogData = (logDataObj) => {
   };
 };
 
-const main = async () => {
-  //Test changing the parameters below
-  const START_BLOCK = 11001621;
-  const END_BLOCK = 11007622;
-  const ADDRESSES = ["0x3883f5e181fccaF8410FA61e12b59BAd963fb645"];
-  const TOPICS = [
-    ["0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef"],
-  ];
+const run_benchmark = async (start_block, end_block, addresses, topics) => {
+  let skarData = await getDataFromSkar(
+    (from_block, to_block) =>
+      getLogsRequestBodySkar(from_block, to_block, addresses, topics),
+    start_block,
+    end_block,
+  );
 
+  let ethArchiveData = await getDataFromEthArchive(
+    (fromBlock, toBlock) =>
+      getLogsRequestBodyEthArchive(fromBlock, toBlock, addresses, topics),
+    start_block,
+    end_block
+  );
+
+  console.log("finished benchmark");
+};
+
+const run_test = async (start_block, end_block, addresses, topics) => {
   let skarDataPromise = getDataFromSkar(
     (from_block, to_block) =>
-      getLogsRequestBodySkar(from_block, to_block, ADDRESSES, TOPICS),
-    START_BLOCK,
-    END_BLOCK,
+      getLogsRequestBodySkar(from_block, to_block, addresses, topics),
+    start_block,
+    end_block,
   );
 
   let ethArchiveDataPromise = getDataFromEthArchive(
     (fromBlock, toBlock) =>
-      getLogsRequestBodyEthArchive(fromBlock, toBlock, ADDRESSES, TOPICS),
-    START_BLOCK,
-    END_BLOCK
+      getLogsRequestBodyEthArchive(fromBlock, toBlock, addresses, topics),
+    start_block,
+    end_block
   );
 
   let rpcDataPromise = getLogsWithTxsAndBlocks(
-    START_BLOCK,
-    END_BLOCK,
-    ADDRESSES,
-    TOPICS
+    start_block,
+    end_block,
+    addresses,
+    topics
   );
 
   const [skarData, ethArchiveData, rpcData] = await Promise.all([
@@ -250,4 +260,7 @@ const main = async () => {
   console.log("All queries match");
 };
 
-main();
+run_test(11001621, 11007622, ["0x3883f5e181fccaF8410FA61e12b59BAd963fb645"], [["0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef"]]);
+run_test(0, 500, ["0x3883f5e181fccaF8410FA61e12b59BAd963fb645"], [["0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef"]]);
+
+run_benchmark(0, 17123123, ["0x7a63d17F5a59BCA04B6702F461b1f1A1c59b100B", "0x282BDD42f4eb70e7A9D9F40c8fEA0825B7f68C5D"], []);

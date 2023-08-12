@@ -13,7 +13,7 @@ use wyhash::wyhash;
 
 use crate::{
     config::QueryConfig,
-    db::{BlockRange, FolderIndexIterator},
+    db::{BlockRange, FolderIndex, RowGroupIndex},
     state::State,
     types::{LogSelection, Query, QueryResult, QueryResultData, TransactionSelection},
 };
@@ -59,7 +59,6 @@ impl Handler {
     }
 
     pub fn handle(self: Arc<Self>, query: Query) -> Result<mpsc::Receiver<Result<QueryResult>>> {
-        let handler = self.clone();
         let (tx, rx) = mpsc::channel(1);
 
         let folder_index_iterator = self
@@ -71,122 +70,146 @@ impl Handler {
             ))
             .context("start folder index iterator")?;
 
-        tokio::task::spawn_blocking(move || {
-            let iter = QueryResultIterator {
-                finished: false,
-                start_time: Instant::now(),
-                handler,
-                query,
-                folder_index_iterator,
-            };
+        let (task_tx, task_rx) = std::sync::mpsc::channel();
 
-            for res in iter {
-                let is_err = res.is_err();
-                if tx.blocking_send(res).is_err() {
-                    break;
+        let runner = QueryRunner {
+            rx: task_rx,
+            tx: tx.clone(),
+            handler: self.clone(),
+            query: query.clone(),
+        };
+
+        tokio::task::spawn_blocking(move || runner.run());
+
+        if let Some(mut folder_index_iterator) = folder_index_iterator {
+            tokio::task::spawn_blocking(move || {
+                while let Some(folder_index) = folder_index_iterator.next() {
+                    let folder_index = match folder_index {
+                        Ok(fi) => fi,
+                        Err(e) => {
+                            task_tx.send(Err(e)).ok();
+                            return;
+                        }
+                    };
+
+                    let pruned_query = prune_query(&query, &folder_index.address_filter.0);
+
+                    if pruned_query.logs.is_empty()
+                        && pruned_query.transactions.is_empty()
+                        && !pruned_query.include_all_blocks
+                    {
+                        task_tx
+                            .send(Ok(Task::EmptyResult(QueryResult {
+                                data: QueryResultData::default(),
+                                next_block: calculate_next_block(
+                                    folder_index.block_range.1,
+                                    query.to_block,
+                                ),
+                            })))
+                            .ok();
+                    } else {
+                        let rg_index = match folder_index_iterator
+                            .read_row_group_index(folder_index.row_group_index_offset)
+                        {
+                            Ok(rg_index) => rg_index,
+                            Err(e) => {
+                                task_tx.send(Err(e)).ok();
+                                return;
+                            }
+                        };
+
+                        if task_tx
+                            .send(Ok(Task::QueryFolder(folder_index, rg_index, pruned_query)))
+                            .is_err()
+                        {
+                            return;
+                        }
+                    }
                 }
-                if is_err {
-                    break;
-                }
-            }
-        });
+            });
+        }
 
         Ok(rx)
     }
 }
 
-pub struct QueryResultIterator {
-    finished: bool,
-    start_time: Instant,
-    handler: Arc<Handler>,
-    query: Query,
-    folder_index_iterator: Option<FolderIndexIterator>,
+enum Task {
+    QueryFolder(FolderIndex, RowGroupIndex, Query),
+    EmptyResult(QueryResult),
 }
 
-impl Iterator for QueryResultIterator {
-    type Item = Result<QueryResult>;
+struct QueryRunner {
+    rx: std::sync::mpsc::Receiver<Result<Task>>,
+    tx: mpsc::Sender<Result<QueryResult>>,
+    handler: Arc<Handler>,
+    query: Query,
+}
 
-    fn next(&mut self) -> Option<Self::Item> {
-        if self.finished {
-            return None;
-        }
+impl QueryRunner {
+    fn run(self) -> Result<()> {
+        let start_time = Instant::now();
 
-        if self.start_time.elapsed().as_millis() >= self.handler.cfg.time_limit_ms as u128 {
-            self.finished = true;
-            return None;
-        }
-
-        let folder_index = match self.folder_index_iterator.as_mut().and_then(|i| i.next()) {
-            Some(folder_index) => folder_index,
-            None => {
-                self.finished = true;
-
-                let in_mem = self.handler.state.in_mem.load();
-
-                if let Some(to_block) = self.query.to_block {
-                    if to_block <= in_mem.from_block {
-                        return None;
-                    }
-                }
-
-                if self.query.from_block >= in_mem.to_block {
-                    return None;
-                }
-
-                let data_provider = InMemDataProvider { in_mem: &in_mem };
-
-                let query_res = execute_query(&data_provider, &self.query)
-                    .map(|data| QueryResult {
-                        data,
-                        next_block: next_block(in_mem.to_block, self.query.to_block),
-                    })
-                    .context("execute in memory query");
-
-                return Some(query_res);
+        while let Ok(task) = self.rx.recv() {
+            if start_time.elapsed().as_millis() >= self.handler.cfg.time_limit_ms as u128 {
+                return Ok(());
             }
-        };
 
-        let folder_index = match folder_index {
-            Ok(folder_index) => folder_index,
-            Err(e) => return Some(Err(e.context("failed to read folder index"))),
-        };
+            let task = match task {
+                Ok(task) => task,
+                Err(e) => {
+                    self.tx.blocking_send(Err(e)).ok();
+                    break;
+                }
+            };
 
-        let pruned_query = prune_query(&self.query, &folder_index.address_filter.0);
+            let res = match task {
+                Task::QueryFolder(folder_index, rg_index, pruned_query) => {
+                    let mut path = self.handler.parquet_path.clone();
+                    path.push(format!(
+                        "{}-{}",
+                        folder_index.block_range.0, folder_index.block_range.1
+                    ));
 
-        if pruned_query.logs.is_empty()
-            && pruned_query.transactions.is_empty()
-            && !pruned_query.include_all_blocks
-        {
-            return Some(Ok(QueryResult {
-                data: QueryResultData::default(),
-                next_block: next_block(folder_index.block_range.1, self.query.to_block),
-            }));
+                    let data_provider = ParquetDataProvider { path, rg_index };
+
+                    let next_block =
+                        calculate_next_block(folder_index.block_range.1, pruned_query.to_block);
+
+                    execute_query(&data_provider, &pruned_query)
+                        .map(|data| QueryResult { data, next_block })
+                }
+                Task::EmptyResult(res) => Ok(res),
+            };
+
+            let is_err = res.is_err();
+
+            if self.tx.blocking_send(res).is_err() || is_err {
+                return Ok(());
+            }
         }
 
-        let rg_index = match self
-            .folder_index_iterator
-            .as_mut()
-            .unwrap()
-            .read_row_group_index(folder_index.row_group_index_offset)
-        {
-            Ok(rg_index) => rg_index,
-            Err(e) => return Some(Err(e.context("read row group index"))),
-        };
+        let in_mem = self.handler.state.in_mem.load();
 
-        let mut path = self.handler.parquet_path.clone();
-        path.push(format!(
-            "{}-{}",
-            folder_index.block_range.0, folder_index.block_range.1
-        ));
+        if let Some(to_block) = self.query.to_block {
+            if to_block <= in_mem.from_block {
+                return Ok(());
+            }
+        }
 
-        let data_provider = ParquetDataProvider { path, rg_index };
+        if self.query.from_block >= in_mem.to_block {
+            return Ok(());
+        }
 
-        let query_result = execute_query(&data_provider, &pruned_query).map(|data| QueryResult {
+        let data_provider = InMemDataProvider { in_mem: &in_mem };
+
+        let query_res = execute_query(&data_provider, &self.query).map(|data| QueryResult {
             data,
-            next_block: next_block(folder_index.block_range.1, self.query.to_block),
+            next_block: calculate_next_block(in_mem.to_block, self.query.to_block),
         });
 
-        Some(query_result)
+        self.tx.blocking_send(query_res).ok();
+
+        Ok(())
     }
 }
 
@@ -242,7 +265,7 @@ fn prune_query(query: &Query, filter: &SbbfFilter) -> Query {
     }
 }
 
-fn next_block(mut to_block: u64, query_limit: Option<u64>) -> u64 {
+fn calculate_next_block(mut to_block: u64, query_limit: Option<u64>) -> u64 {
     if let Some(limit) = query_limit {
         to_block = cmp::min(limit, to_block);
     }
