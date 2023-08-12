@@ -131,15 +131,15 @@ const getDataFromSkar = async (makeRequestBody, fromBlock, toBlockInclusive) => 
 
   let data = [];
   let total = 0;
-  let nextBlock = fromBlock-2;
+  let nextBlock = fromBlock;
 
   console.log(`Syncing using skar from ${fromBlock} to ${toBlockInclusive}`);
 
   while (true) {
     const req = makeRequestBody(nextBlock, toBlock);
     const respBody = await getResp(endPoint, req);
-    const { totalTime } = respBody;
-    nextBlock = respBody.nextBlock;
+    const totalTime = respBody.total_execution_time;
+    nextBlock = respBody.next_block;
     data = [...data, ...respBody.data];
     console.log(
       `scanned ${nextBlock - req.from_block} blocks in ${totalTime} ms`
