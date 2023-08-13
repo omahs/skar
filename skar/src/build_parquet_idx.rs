@@ -150,10 +150,33 @@ pub fn build_parquet_indices(path: &Path) -> Result<(FolderIndex, RowGroupIndex)
             address_filter.insert_hash(wyhash(addr, 0));
         }
 
+        let mut topic_filters = Vec::with_capacity(4);
+
+        for col_idx in 8..12 {
+            let col = chunk.columns()[col_idx]
+                .as_any()
+                .downcast_ref::<BinaryArray<i32>>()
+                .unwrap();
+
+            let mut topic_set = BTreeSet::new();
+
+            for t in col.iter().flatten() {
+                topic_set.insert(t);
+            }
+
+            let mut topic_filter = BFilter::new(8, topic_set.len());
+            for topic in topic_set.into_iter() {
+                topic_filter.insert_hash(wyhash(topic, 0));
+            }
+
+            topic_filters.push(BloomFilter(topic_filter));
+        }
+
         rg_index.log.push(LogRowGroupIndex {
             min_block_num,
             max_block_num,
             address_filter: BloomFilter(address_filter),
+            topic_filters: topic_filters.try_into().unwrap(),
         });
     }
 

@@ -37,4 +37,5 @@ pub struct LogRowGroupIndex {
     pub min_block_num: u64,
     pub max_block_num: u64,
     pub address_filter: BloomFilter,
+    pub topic_filters: [BloomFilter; 4],
 }

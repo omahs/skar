@@ -308,11 +308,26 @@ fn can_skip_log_row_group(ctx: &QueryContext, rg_index: &LogRowGroupIndex) -> bo
     }
 
     !ctx.query.logs.iter().any(|log| {
-        log.address.is_empty()
+        let addr = log.address.is_empty()
             || log.address.iter().any(|addr| {
                 let hash = wyhash(addr.as_slice(), 0);
                 rg_index.address_filter.0.contains_hash(hash)
-            })
+            });
+
+        let topics = log.topics.is_empty()
+            || log
+                .topics
+                .iter()
+                .zip(rg_index.topic_filters.iter())
+                .all(|(topic, filter)| {
+                    topic.is_empty()
+                        || topic.iter().any(|t| {
+                            let hash = wyhash(t.as_slice(), 0);
+                            filter.0.contains_hash(hash)
+                        })
+                });
+
+        addr && topics
     })
 }
 
@@ -337,6 +352,7 @@ const LOG_QUERY_FIELDS: &[&str] = &[
 
 #[cfg(test)]
 mod tests {
+    use arrayvec::ArrayVec;
     use sbbf_rs_safe::Filter;
 
     use crate::{
@@ -626,6 +642,7 @@ mod tests {
         min_block_num: u64,
         max_block_num: u64,
         addrs: Vec<&[u8]>,
+        topics: Vec<Vec<&[u8]>>,
     ) -> bool {
         can_skip_log_row_group(
             &QueryContext {
@@ -650,6 +667,17 @@ mod tests {
                         filter
                     },
                 )),
+                topic_filters: topics
+                    .iter()
+                    .map(|t| {
+                        BloomFilter(t.iter().fold(Filter::new(100, t.len()), |mut filter, t| {
+                            filter.insert_hash(wyhash(t, 0));
+                            filter
+                        }))
+                    })
+                    .collect::<Vec<_>>()
+                    .try_into()
+                    .unwrap(),
             },
         )
     }
@@ -663,6 +691,7 @@ mod tests {
             11,
             23,
             vec![],
+            vec![vec![], vec![], vec![], vec![]],
         ));
         assert!(!can_skip_log_rg_test(
             0,
@@ -681,6 +710,7 @@ mod tests {
                 &hex_literal::hex!("48bBf1c68037BF35b0eB090f1B5E0fa52F690502"),
                 &hex_literal::hex!("11bBf1c68037BF35b0eB090f1B5E0fa52F690402")
             ],
+            vec![vec![], vec![], vec![], vec![]],
         ));
         assert!(can_skip_log_rg_test(
             0,
@@ -699,6 +729,7 @@ mod tests {
                 &hex_literal::hex!("48bBf1c68037BF35b0eB090f1B5E0fa52F690502"),
                 &hex_literal::hex!("11bBf1c68037BF35b0eB090f1B5E0fa52F690402")
             ],
+            vec![vec![], vec![], vec![], vec![]],
         ));
         assert!(!can_skip_log_rg_test(
             0,
@@ -710,6 +741,83 @@ mod tests {
             11,
             23,
             vec![],
+            vec![vec![], vec![], vec![], vec![]],
+        ));
+        assert!(!can_skip_log_rg_test(
+            0,
+            Some(12),
+            vec![LogSelection {
+                address: vec![
+                    hex_literal::hex!("48bBf1c68037BF35b0eB090f1B5E0fa52F690502")
+                        .try_into()
+                        .unwrap()
+                ],
+                topics: ArrayVec::try_from(
+                    [
+                        vec![],
+                        vec![],
+                        vec![hex_literal::hex!(
+                            "00000000000000000000000048bBf1c68037BF35b0eB090f1B5E0fa52F690502"
+                        )
+                        .try_into()
+                        .unwrap()],
+                        vec![]
+                    ]
+                    .as_slice()
+                )
+                .unwrap(),
+            }],
+            11,
+            23,
+            vec![&hex_literal::hex!(
+                "48bBf1c68037BF35b0eB090f1B5E0fa52F690502"
+            )],
+            vec![
+                vec![],
+                vec![],
+                vec![&hex_literal::hex!(
+                    "00000000000000000000000048bBf1c68037BF35b0eB090f1B5E0fa52F690502"
+                )],
+                vec![]
+            ],
+        ));
+        assert!(can_skip_log_rg_test(
+            0,
+            Some(12),
+            vec![LogSelection {
+                address: vec![
+                    hex_literal::hex!("48bBf1c68037BF35b0eB090f1B5E0fa52F690502")
+                        .try_into()
+                        .unwrap()
+                ],
+                topics: ArrayVec::try_from(
+                    [
+                        vec![],
+                        vec![],
+                        vec![hex_literal::hex!(
+                            "69000000000000000000000018bBf1c68037BF35b0eB090f1B5E0fa52F690502"
+                        )
+                        .try_into()
+                        .unwrap()],
+                        vec![]
+                    ]
+                    .as_slice()
+                )
+                .unwrap(),
+            }],
+            11,
+            23,
+            vec![&hex_literal::hex!(
+                "48bBf1c68037BF35b0eB090f1B5E0fa52F690502"
+            )],
+            vec![
+                vec![],
+                vec![],
+                vec![&hex_literal::hex!(
+                    "00000000000000000000000048bBf1c68037BF35b0eB090f1B5E0fa52F690502"
+                )],
+                vec![]
+            ],
         ));
     }
 }
