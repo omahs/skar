@@ -1,6 +1,6 @@
 # skar
-[![CI](https://github.com/ozgrakkurt/skar/actions/workflows/ci.yaml/badge.svg?branch=main)](https://github.com/ozgrakkurt/skar/actions/workflows/ci.yaml)
-[![codecov](https://codecov.io/gh/ozgrakkurt/skar/branch/main/graph/badge.svg?token=SPS7FB1V48)](https://codecov.io/gh/ozgrakkurt/skar)
+[![CI](https://github.com/data-indexing/skar/actions/workflows/ci.yaml/badge.svg?branch=main)](https://github.com/data-indexing/skar/actions/workflows/ci.yaml)
+[![codecov](https://codecov.io/gh/data-indexing/skar/branch/main/graph/badge.svg?token=SPS7FB1V48)](https://codecov.io/gh/data-indexing/skar)
 
 _**skar**_ is an indexer for Ethereum(EVM) data. It indexes the data and exposes a high-feature API.
 
