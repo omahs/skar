@@ -15,7 +15,7 @@ pub struct Config {
 #[derive(Serialize, Deserialize, Clone, Copy)]
 pub struct QueryConfig {
     pub time_limit_ms: u64,
-    pub max_concurrent_queries: usize,
+    pub max_query_concurrency: usize,
 }
 
 #[derive(Serialize, Deserialize)]
