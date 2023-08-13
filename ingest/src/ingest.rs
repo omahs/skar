@@ -2,10 +2,11 @@ use crate::config::InnerConfig;
 use crate::{validate_batch_data, BatchData, IngestConfig};
 use anyhow::{Context, Error, Result};
 use futures::{stream, StreamExt};
-use skar_format::{Block, Transaction, TransactionReceipt};
-use skar_rpc_client::{GetBlockByNumber, GetBlockReceipts, RpcClient, RpcRequest};
+use skar_format::{Block, BlockNumber, Transaction, TransactionReceipt};
+use skar_rpc_client::{GetBlockByNumber, GetBlockNumber, GetBlockReceipts, RpcClient, RpcRequest};
 use std::cmp;
 use std::sync::Arc;
+use std::time::Duration;
 use tokio::sync::mpsc;
 
 pub struct Ingest {
@@ -48,16 +49,79 @@ struct Ingester {
 
 impl Ingester {
     async fn ingest(self) -> Result<()> {
-        let step: u64 = self.config.batch_size.get().try_into().unwrap();
-        let config = self.config;
+        let mut next_block = self.initial_sync().await.context("run initial sync")?;
+        let mut tip_block_num = 0;
 
-        let futs = (config.from_block..config.to_block)
-            .step_by(config.batch_size.get())
+        log::info!("starting to wait for new blocks");
+
+        loop {
+            if tip_block_num >= next_block {
+                let block: Block<Transaction> = self
+                    .client
+                    .send(GetBlockByNumber(next_block.into()).into())
+                    .await
+                    .context("get block data")?
+                    .try_into_single()
+                    .unwrap();
+                let receipts: Vec<TransactionReceipt> = self
+                    .client
+                    .send(GetBlockReceipts(next_block.into()).into())
+                    .await
+                    .context("get block receipts")?
+                    .try_into_single()
+                    .unwrap();
+
+                log::trace!("downloaded data for block {}", next_block);
+
+                let data = BatchData {
+                    blocks: vec![block],
+                    receipts: vec![receipts],
+                    from_block: next_block,
+                    to_block: next_block + 1,
+                };
+
+                validate_batch_data(&data).context("validate batch data")?;
+
+                if self.data_tx.send(data).await.is_err() {
+                    log::warn!("quitting ingest loop because the receiver is dropped");
+                    break;
+                }
+
+                next_block += 1;
+            } else {
+                tokio::time::sleep(Duration::from_millis(100)).await;
+
+                tip_block_num = self
+                    .get_block_num()
+                    .await
+                    .context("get tip block num from rpc")?;
+            }
+        }
+
+        Ok(())
+    }
+
+    async fn initial_sync(&self) -> Result<u64> {
+        let to_block = self
+            .get_block_num()
+            .await
+            .context("get tip block num from rpc")?;
+
+        let step: u64 = self.config.batch_size.get().try_into().unwrap();
+
+        log::info!(
+            "starting initial sync from {} to {}",
+            self.config.from_block,
+            to_block
+        );
+
+        let futs = (self.config.from_block..to_block)
+            .step_by(self.config.batch_size.get())
             .map(|start_block| {
                 let client = self.client.clone();
 
                 async move {
-                    let end_block = cmp::min(config.to_block, start_block + step);
+                    let end_block = cmp::min(to_block, start_block + step);
 
                     log::debug!("ingesting {}-{}", start_block, end_block);
 
@@ -88,7 +152,7 @@ impl Ingester {
                 }
             });
 
-        let mut data_stream = stream::iter(futs).buffered(config.concurrency_limit.get());
+        let mut data_stream = stream::iter(futs).buffered(self.config.concurrency_limit.get());
         while let Some(data) = data_stream.next().await {
             let data = data?;
 
@@ -100,6 +164,21 @@ impl Ingester {
             }
         }
 
-        Ok(())
+        log::info!("finished initial sync");
+
+        Ok(to_block)
+    }
+
+    async fn get_block_num(&self) -> Result<u64> {
+        let to_block: BlockNumber = self
+            .client
+            .send(GetBlockNumber.into())
+            .await
+            .context("execute GetBlockNumber request")?
+            .try_into_single()
+            .unwrap();
+        let to_block: u64 = to_block.into();
+
+        Ok(to_block)
     }
 }

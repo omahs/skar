@@ -27,8 +27,6 @@ This project is currently in early stage of development and not ready to be used
 ```toml
 [query]
 time_limit_ms = 5000
-parquet_folder_batch_size = 64
-max_concurrent_queries = 32
 
 [http_server]
 addr = "127.0.0.1:1131"

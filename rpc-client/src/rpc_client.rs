@@ -30,6 +30,7 @@ impl RpcClient {
         &self.endpoints
     }
 
+    /// Executes the given rpc request without retries
     pub async fn send_once(&self, req: RpcRequest) -> Result<RpcResponse> {
         let req = Arc::new(req);
         let mut errs = Vec::new();
@@ -50,6 +51,7 @@ impl RpcClient {
         Err(Error::NoHealthyEndpoints(errs))
     }
 
+    /// Executes the given rpc request, retries using exponential backoff until it succeds.
     pub async fn send(&self, req: RpcRequest) -> Result<RpcResponse> {
         let mut base = 1;
 

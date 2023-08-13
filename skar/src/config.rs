@@ -5,30 +5,47 @@ use skar_ingest::IngestConfig;
 
 #[derive(Serialize, Deserialize)]
 pub struct Config {
+    /// Ingestion config
     pub ingest: IngestConfig,
+    /// Config for parquet files
     pub parquet: ParquetConfig,
+    /// Config for the embedded database
     pub db: DbConfig,
+    /// Config for the http server
     pub http_server: HttpServerConfig,
+    /// Config for query handler
     pub query: QueryConfig,
 }
 
 #[derive(Serialize, Deserialize, Clone, Copy)]
 pub struct QueryConfig {
+    /// Time limit for handling a single query.
+    ///
+    /// If this time limit is hit, the query will stop,
+    /// and the data will be returned to the user.
     pub time_limit_ms: u64,
-    pub max_query_concurrency: usize,
 }
 
 #[derive(Serialize, Deserialize)]
 pub struct HttpServerConfig {
+    /// Socket address to serve the http server from
     pub addr: SocketAddr,
+    /// Response size limit for the http requests.
+    ///
+    /// If reponse payload reaches this size, the query will stop and
+    /// the payload will be returned to client.
     pub response_size_limit_mb: usize,
 }
 
 #[derive(Serialize, Deserialize)]
 pub struct ParquetConfig {
+    /// path to the directory of parquet files
     pub path: PathBuf,
+    /// config for block parquet files
     pub blocks: TableConfig,
+    /// config for transaction parquet files
     pub transactions: TableConfig,
+    /// config for log parquet files
     pub logs: TableConfig,
 }
 
@@ -48,5 +65,6 @@ pub struct TableConfig {
 
 #[derive(Serialize, Deserialize)]
 pub struct DbConfig {
+    /// Path to the database directory
     pub path: PathBuf,
 }

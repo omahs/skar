@@ -41,6 +41,12 @@ impl From<GetBlockNumber> for RpcRequest {
     }
 }
 
+impl From<GetBlockReceipts> for RpcRequest {
+    fn from(req: GetBlockReceipts) -> Self {
+        Self::Single(RpcRequestImpl::GetBlockReceipts(req.0))
+    }
+}
+
 impl TryInto<BlockNumber> for RpcResponseImpl {
     type Error = ();
 
