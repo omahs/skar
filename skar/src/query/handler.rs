@@ -474,8 +474,8 @@ mod tests {
             logs: vec![LogSelection {
                 address: vec![
                     hex_literal::hex!("48bBf1c68037BF35b0eB090f1B5E0fa52F690502")
-                            .try_into()
-                            .unwrap()
+                        .try_into()
+                        .unwrap(),
                 ],
                 topics: ArrayVec::try_from(
                     [vec![hex_literal::hex!(
@@ -508,8 +508,8 @@ mod tests {
             logs: vec![LogSelection {
                 address: vec![
                     hex_literal::hex!("48bBf1c68037BF35b0eB090f1B5E0fa52F690502")
-                            .try_into()
-                            .unwrap()
+                        .try_into()
+                        .unwrap(),
                 ],
                 topics: ArrayVec::try_from(
                     [vec![hex_literal::hex!(
