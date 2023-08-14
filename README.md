@@ -102,17 +102,17 @@ path = "data/parquet"
 
 [parquet.blocks]
 # Maximum number of blocks per parquet folder
-max_file_size = 200000
+max_file_size = 100000
 # Maximum number of blocks per row group in block parquet files
-max_row_group_size = 5000
+max_row_group_size = 10000
 
 [parquet.transactions]
 max_file_size = 100000
-max_row_group_size = 5000
+max_row_group_size = 10000
 
 [parquet.logs]
 max_file_size = 100000
-max_row_group_size = 5000
+max_row_group_size = 10000
 
 ```
 

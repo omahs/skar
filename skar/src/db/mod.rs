@@ -428,6 +428,7 @@ mod tests {
             FolderIndex {
                 block_range: BlockRange(1, 123456),
                 address_filter: BloomFilter(Filter::new(8, 10000)),
+                topic_filter: BloomFilter(Filter::new(31, 69)),
                 row_group_index_offset: 0,
             },
             RowGroupIndex {
@@ -443,6 +444,7 @@ mod tests {
             FolderIndex {
                 block_range: BlockRange(0, 123456),
                 address_filter: BloomFilter(Filter::new(8, 10000)),
+                topic_filter: BloomFilter(Filter::new(31, 69)),
                 row_group_index_offset: 0,
             },
             RowGroupIndex {
@@ -489,6 +491,7 @@ mod tests {
             FolderIndex {
                 block_range: BlockRange(123456, 1234567),
                 address_filter: BloomFilter(Filter::new(8, 10000)),
+                topic_filter: BloomFilter(Filter::new(31, 69)),
                 row_group_index_offset: 0,
             },
             RowGroupIndex {

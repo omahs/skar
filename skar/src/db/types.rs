@@ -8,6 +8,7 @@ pub struct BlockRange(pub u64, pub u64);
 pub struct FolderIndex {
     pub block_range: BlockRange,
     pub address_filter: BloomFilter,
+    pub topic_filter: BloomFilter,
     pub row_group_index_offset: u32,
 }
 
@@ -37,5 +38,5 @@ pub struct LogRowGroupIndex {
     pub min_block_num: u64,
     pub max_block_num: u64,
     pub address_filter: BloomFilter,
-    pub topic_filters: [BloomFilter; 4],
+    pub topic_filter: BloomFilter,
 }

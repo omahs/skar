@@ -124,6 +124,10 @@ impl ParquetDataProvider {
         row_groups: &[usize],
         table_name: &str,
     ) -> Result<Data> {
+        if row_groups.is_empty() {
+            return Ok(Vec::new());
+        }
+
         let mut path = self.path.clone();
         path.push(format!("{table_name}.parquet"));
 
@@ -315,17 +319,13 @@ fn can_skip_log_row_group(ctx: &QueryContext, rg_index: &LogRowGroupIndex) -> bo
             });
 
         let topics = log.topics.is_empty()
-            || log
-                .topics
-                .iter()
-                .zip(rg_index.topic_filters.iter())
-                .all(|(topic, filter)| {
-                    topic.is_empty()
-                        || topic.iter().any(|t| {
-                            let hash = wyhash(t.as_slice(), 0);
-                            filter.0.contains_hash(hash)
-                        })
-                });
+            || log.topics.iter().all(|topic| {
+                topic.is_empty()
+                    || topic.iter().any(|t| {
+                        let hash = wyhash(t.as_slice(), 0);
+                        rg_index.topic_filter.0.contains_hash(hash)
+                    })
+            });
 
         addr && topics
     })
@@ -644,6 +644,12 @@ mod tests {
         addrs: Vec<&[u8]>,
         topics: Vec<Vec<&[u8]>>,
     ) -> bool {
+        let mut topic_filter = Filter::new(100, topics.iter().fold(0, |acc, t| acc + t.len()));
+
+        for t in topics.iter().flat_map(|t| t.iter()) {
+            topic_filter.insert_hash(wyhash(t, 0));
+        }
+
         can_skip_log_row_group(
             &QueryContext {
                 query: Query {
@@ -667,17 +673,7 @@ mod tests {
                         filter
                     },
                 )),
-                topic_filters: topics
-                    .iter()
-                    .map(|t| {
-                        BloomFilter(t.iter().fold(Filter::new(100, t.len()), |mut filter, t| {
-                            filter.insert_hash(wyhash(t, 0));
-                            filter
-                        }))
-                    })
-                    .collect::<Vec<_>>()
-                    .try_into()
-                    .unwrap(),
+                topic_filter: BloomFilter(topic_filter),
             },
         )
     }

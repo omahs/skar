@@ -6,8 +6,9 @@ use std::{
 };
 
 use anyhow::{Context, Result};
+use arrayvec::ArrayVec;
 use sbbf_rs_safe::Filter as SbbfFilter;
-use skar_format::Address;
+use skar_format::{Address, LogArgument};
 use tokio::sync::mpsc;
 use wyhash::wyhash;
 
@@ -151,7 +152,11 @@ impl Iterator for QueryResultIterator {
             Err(e) => return Some(Err(e.context("failed to read folder index"))),
         };
 
-        let pruned_query = prune_query(&self.query, &folder_index.address_filter.0);
+        let pruned_query = prune_query(
+            &self.query,
+            &folder_index.address_filter.0,
+            &folder_index.topic_filter.0,
+        );
 
         if pruned_query.logs.is_empty()
             && pruned_query.transactions.is_empty()
@@ -190,12 +195,12 @@ impl Iterator for QueryResultIterator {
     }
 }
 
-fn prune_query(query: &Query, filter: &SbbfFilter) -> Query {
+fn prune_query(query: &Query, address_filter: &SbbfFilter, topic_filter: &SbbfFilter) -> Query {
     let prune_addrs = |addrs: Vec<Address>| -> Option<Vec<Address>> {
         if !addrs.is_empty() {
             let out = addrs
                 .into_iter()
-                .filter(|addr| filter.contains_hash(wyhash(addr.as_slice(), 0)))
+                .filter(|addr| address_filter.contains_hash(wyhash(addr.as_slice(), 0)))
                 .collect::<Vec<_>>();
 
             if out.is_empty() {
@@ -208,6 +213,21 @@ fn prune_query(query: &Query, filter: &SbbfFilter) -> Query {
         }
     };
 
+    let prune_topics =
+        |topics: ArrayVec<Vec<LogArgument>, 4>| -> Option<ArrayVec<Vec<LogArgument>, 4>> {
+            if topics.iter().all(|topic| {
+                topic.is_empty()
+                    || topic.iter().any(|t| {
+                        let hash = wyhash(t.as_slice(), 0);
+                        topic_filter.contains_hash(hash)
+                    })
+            }) {
+                Some(topics)
+            } else {
+                None
+            }
+        };
+
     Query {
         logs: query
             .logs
@@ -215,10 +235,8 @@ fn prune_query(query: &Query, filter: &SbbfFilter) -> Query {
             .cloned()
             .filter_map(|selection| {
                 let address = prune_addrs(selection.address)?;
-                Some(LogSelection {
-                    address,
-                    ..selection
-                })
+                let topics = prune_topics(selection.topics)?;
+                Some(LogSelection { address, topics })
             })
             .collect(),
         transactions: query
@@ -283,7 +301,7 @@ mod tests {
 
         let filter = SbbfFilter::new(15, 31);
 
-        let pruned_query = prune_query(&query, &filter);
+        let pruned_query = prune_query(&query, &filter, &filter);
 
         assert_eq!(pruned_query.from_block, 0);
         assert_eq!(pruned_query.to_block, None);
@@ -308,7 +326,7 @@ mod tests {
             }],
         };
 
-        let pruned_query = prune_query(&query, &filter);
+        let pruned_query = prune_query(&query, &filter, &filter);
 
         assert_eq!(pruned_query.transactions.len(), 1);
         assert_eq!(pruned_query.logs.len(), 1);
@@ -334,7 +352,37 @@ mod tests {
             }],
         };
 
-        let pruned_query = prune_query(&query, &filter);
+        let pruned_query = prune_query(&query, &filter, &filter);
+
+        assert_eq!(pruned_query.transactions.len(), 1);
+        assert_eq!(pruned_query.logs.len(), 0);
+
+        let query = Query {
+            from_block: 0,
+            to_block: None,
+            field_selection: Default::default(),
+            include_all_blocks: false,
+            transactions: vec![TransactionSelection {
+                from: vec![],
+                to: vec![],
+                sighash: vec![],
+                status: None,
+            }],
+            logs: vec![LogSelection {
+                address: vec![],
+                topics: ArrayVec::try_from(
+                    [vec![hex_literal::hex!(
+                        "00000000000000000000000048bBf1c68037BF35b0eB090f1B5E0fa52F690502"
+                    )
+                    .try_into()
+                    .unwrap()]]
+                    .as_slice(),
+                )
+                .unwrap(),
+            }],
+        };
+
+        let pruned_query = prune_query(&query, &filter, &filter);
 
         assert_eq!(pruned_query.transactions.len(), 1);
         assert_eq!(pruned_query.logs.len(), 0);
@@ -345,6 +393,10 @@ mod tests {
         let mut filter = SbbfFilter::new(100, 1000);
         filter.insert_hash(wyhash(
             &hex_literal::hex!("48bBf1c68037BF35b0eB090f1B5E0fa52F690502"),
+            0,
+        ));
+        filter.insert_hash(wyhash(
+            &hex_literal::hex!("00000000000000000000000048bBf1c68037BF35b0eB090f1B5E0fa52F690502"),
             0,
         ));
         let filter = filter;
@@ -400,12 +452,80 @@ mod tests {
             ],
         };
 
-        let pruned_query = prune_query(&query, &filter);
+        let pruned_query = prune_query(&query, &filter, &filter);
 
         assert_eq!(pruned_query.from_block, 0);
         assert_eq!(pruned_query.to_block, None);
         assert!(!pruned_query.include_all_blocks);
         assert_eq!(pruned_query.transactions.len(), 1);
         assert_eq!(pruned_query.logs.len(), 2);
+
+        let query = Query {
+            from_block: 0,
+            to_block: None,
+            field_selection: Default::default(),
+            include_all_blocks: false,
+            transactions: vec![TransactionSelection {
+                from: vec![],
+                to: vec![],
+                sighash: vec![],
+                status: None,
+            }],
+            logs: vec![LogSelection {
+                address: vec![
+                    hex_literal::hex!("48bBf1c68037BF35b0eB090f1B5E0fa52F690502")
+                            .try_into()
+                            .unwrap()
+                ],
+                topics: ArrayVec::try_from(
+                    [vec![hex_literal::hex!(
+                        "00000000000000000000000048bBf1c68037BF35b0eB090f1B5E0fa52F690502"
+                    )
+                    .try_into()
+                    .unwrap()]]
+                    .as_slice(),
+                )
+                .unwrap(),
+            }],
+        };
+
+        let pruned_query = prune_query(&query, &filter, &filter);
+
+        assert_eq!(pruned_query.transactions.len(), 1);
+        assert_eq!(pruned_query.logs.len(), 1);
+
+        let query = Query {
+            from_block: 0,
+            to_block: None,
+            field_selection: Default::default(),
+            include_all_blocks: false,
+            transactions: vec![TransactionSelection {
+                from: vec![],
+                to: vec![],
+                sighash: vec![],
+                status: None,
+            }],
+            logs: vec![LogSelection {
+                address: vec![
+                    hex_literal::hex!("48bBf1c68037BF35b0eB090f1B5E0fa52F690502")
+                            .try_into()
+                            .unwrap()
+                ],
+                topics: ArrayVec::try_from(
+                    [vec![hex_literal::hex!(
+                        "00000000000000000000000058bBf1c68037BF35b0eB090f1B5E0fa52F690502"
+                    )
+                    .try_into()
+                    .unwrap()]]
+                    .as_slice(),
+                )
+                .unwrap(),
+            }],
+        };
+
+        let pruned_query = prune_query(&query, &filter, &filter);
+
+        assert_eq!(pruned_query.transactions.len(), 1);
+        assert_eq!(pruned_query.logs.len(), 0);
     }
 }

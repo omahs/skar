@@ -37,6 +37,7 @@ pub fn build_parquet_indices(path: &Path) -> Result<(FolderIndex, RowGroupIndex)
     };
 
     let mut folder_addr_set = BTreeSet::new();
+    let mut folder_topic_set = BTreeSet::new();
 
     let mut rg_index = RowGroupIndex {
         block: Vec::new(),
@@ -150,7 +151,7 @@ pub fn build_parquet_indices(path: &Path) -> Result<(FolderIndex, RowGroupIndex)
             address_filter.insert_hash(wyhash(addr, 0));
         }
 
-        let mut topic_filters = Vec::with_capacity(4);
+        let mut topic_set = BTreeSet::new();
 
         for col_idx in 8..12 {
             let col = chunk.columns()[col_idx]
@@ -158,36 +159,39 @@ pub fn build_parquet_indices(path: &Path) -> Result<(FolderIndex, RowGroupIndex)
                 .downcast_ref::<BinaryArray<i32>>()
                 .unwrap();
 
-            let mut topic_set = BTreeSet::new();
-
             for t in col.iter().flatten() {
                 topic_set.insert(t);
+                folder_topic_set.insert(t.to_vec());
             }
+        }
 
-            let mut topic_filter = BFilter::new(8, topic_set.len());
-            for topic in topic_set.into_iter() {
-                topic_filter.insert_hash(wyhash(topic, 0));
-            }
-
-            topic_filters.push(BloomFilter(topic_filter));
+        let mut topic_filter = BFilter::new(8, topic_set.len());
+        for topic in topic_set.into_iter() {
+            topic_filter.insert_hash(wyhash(topic, 0));
         }
 
         rg_index.log.push(LogRowGroupIndex {
             min_block_num,
             max_block_num,
             address_filter: BloomFilter(address_filter),
-            topic_filters: topic_filters.try_into().unwrap(),
+            topic_filter: BloomFilter(topic_filter),
         });
     }
 
-    let mut address_filter = BFilter::new(8, cmp::min(folder_addr_set.len(), 32 * 1024));
+    let mut address_filter = BFilter::new(8, folder_addr_set.len());
     for addr in folder_addr_set.into_iter() {
         address_filter.insert_hash(wyhash(&addr, 0));
+    }
+
+    let mut topic_filter = BFilter::new(8, folder_topic_set.len());
+    for t in folder_topic_set.into_iter() {
+        topic_filter.insert_hash(wyhash(&t, 0));
     }
 
     let folder_index = FolderIndex {
         block_range: BlockRange(folder_min_block_num, folder_max_block_num + 1),
         address_filter: BloomFilter(address_filter),
+        topic_filter: BloomFilter(topic_filter),
         row_group_index_offset: 0,
     };
 
