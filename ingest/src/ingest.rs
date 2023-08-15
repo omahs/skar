@@ -49,6 +49,11 @@ struct Ingester {
 
 impl Ingester {
     async fn ingest(self) -> Result<()> {
+        while self.client.last_block().await == 0 {
+            log::info!("waiting for endpoints to be ready to start ingesting...");
+            tokio::time::sleep(Duration::from_millis(1000)).await;
+        }
+
         let mut next_block = self.initial_sync().await.context("run initial sync")?;
         let mut tip_block_num = 0;
 
