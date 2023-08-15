@@ -60,6 +60,10 @@ impl Endpoint {
         }
     }
 
+    pub async fn last_block(&self) -> Option<BlockNumber> {
+        *self.last_block.read().await
+    }
+
     pub fn url(&self) -> &Url {
         &self.url
     }

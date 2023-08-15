@@ -26,6 +26,18 @@ impl RpcClient {
         Self { endpoints }
     }
 
+    pub async fn last_block(&self) -> u64 {
+        let mut last_block = 0;
+
+        for e in self.endpoints.iter() {
+            if let Some(lb) = e.last_block().await {
+                last_block = cmp::max(last_block, *lb);
+            }
+        }
+
+        last_block
+    }
+
     pub fn endpoints(&self) -> &[Endpoint] {
         &self.endpoints
     }

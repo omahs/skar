@@ -2,8 +2,8 @@ use crate::config::InnerConfig;
 use crate::{validate_batch_data, BatchData, IngestConfig};
 use anyhow::{Context, Error, Result};
 use futures::{stream, StreamExt};
-use skar_format::{Block, BlockNumber, Transaction, TransactionReceipt};
-use skar_rpc_client::{GetBlockByNumber, GetBlockNumber, GetBlockReceipts, RpcClient, RpcRequest};
+use skar_format::{Block, Transaction, TransactionReceipt};
+use skar_rpc_client::{GetBlockByNumber, GetBlockReceipts, RpcClient, RpcRequest};
 use std::cmp;
 use std::sync::Arc;
 use std::time::Duration;
@@ -88,10 +88,7 @@ impl Ingester {
             } else {
                 tokio::time::sleep(Duration::from_millis(100)).await;
 
-                tip_block_num = self
-                    .get_block_num()
-                    .await
-                    .context("get tip block num from rpc")?;
+                tip_block_num = self.client.last_block().await;
             }
         }
 
@@ -100,9 +97,9 @@ impl Ingester {
 
     async fn initial_sync(&self) -> Result<u64> {
         let to_block = self
-            .get_block_num()
+            .client
+            .last_block()
             .await
-            .context("get tip block num from rpc")?
             .saturating_sub(self.config.tip_offset);
 
         let step: u64 = self.config.batch_size.get().try_into().unwrap();
@@ -163,19 +160,6 @@ impl Ingester {
         }
 
         log::info!("finished initial sync");
-
-        Ok(to_block)
-    }
-
-    async fn get_block_num(&self) -> Result<u64> {
-        let to_block: BlockNumber = self
-            .client
-            .send(GetBlockNumber.into())
-            .await
-            .context("execute GetBlockNumber request")?
-            .try_into_single()
-            .unwrap();
-        let to_block: u64 = to_block.into();
 
         Ok(to_block)
     }
