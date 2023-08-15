@@ -4,6 +4,7 @@ use arrayvec::ArrayVec;
 use serde::{Deserialize, Serialize};
 use skar_format::{Address, FixedSizeData, LogArgument};
 
+use crate::hashmap::FastSet;
 use crate::query::ArrowBatch;
 
 pub type Sighash = FixedSizeData<4>;
@@ -67,6 +68,6 @@ pub struct QueryResultData {
 pub struct QueryContext {
     pub query: Query,
     // these "set"s are used for joining transactions and blocks
-    pub transaction_set: BTreeSet<(u64, u64)>,
-    pub block_set: BTreeSet<u64>,
+    pub transaction_set: FastSet<(u64, u64)>,
+    pub block_set: FastSet<u64>,
 }

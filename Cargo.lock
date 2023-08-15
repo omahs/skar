@@ -1919,6 +1919,7 @@ dependencies = [
  "tower-http",
  "uuid",
  "wyhash",
+ "xxhash-rust",
 ]
 
 [[package]]
@@ -2584,3 +2585,9 @@ checksum = "baf6e163c25e3fac820b4b453185ea2dea3b6a3e0a721d4d23d75bd33734c295"
 dependencies = [
  "rand_core",
 ]
+
+[[package]]
+name = "xxhash-rust"
+version = "0.8.6"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "735a71d46c4d68d71d4b24d03fdc2b98e38cea81730595801db779c04fe80d70"

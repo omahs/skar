@@ -357,6 +357,7 @@ mod tests {
 
     use crate::{
         db::BloomFilter,
+        hashmap::FastSet,
         types::{FieldSelection, LogSelection, Query, TransactionSelection},
     };
 
@@ -379,8 +380,8 @@ mod tests {
                         from_block,
                         to_block,
                     },
-                    transaction_set: BTreeSet::new(),
-                    block_set: BTreeSet::new(),
+                    transaction_set: FastSet::default(),
+                    block_set: FastSet::default(),
                 },
                 &BlockRowGroupIndex {
                     min_block_num,
@@ -415,7 +416,7 @@ mod tests {
                         from_block,
                         to_block,
                     },
-                    transaction_set: BTreeSet::new(),
+                    transaction_set: FastSet::default(),
                     block_set: block_set.into_iter().collect(),
                 },
                 &BlockRowGroupIndex {
@@ -451,7 +452,7 @@ mod tests {
                     to_block,
                 },
                 transaction_set: transaction_set.into_iter().collect(),
-                block_set: BTreeSet::new(),
+                block_set: FastSet::default(),
             },
             &TransactionRowGroupIndex {
                 min_block_num,
@@ -660,8 +661,8 @@ mod tests {
                     from_block,
                     to_block,
                 },
-                transaction_set: BTreeSet::new(),
-                block_set: BTreeSet::new(),
+                transaction_set: FastSet::default(),
+                block_set: FastSet::default(),
             },
             &LogRowGroupIndex {
                 min_block_num,

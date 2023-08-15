@@ -1,13 +1,14 @@
 use std::{collections::BTreeSet, sync::Arc};
 
 use crate::{
+    hashmap::FastSet,
     state::ArrowChunk,
     types::{LogSelection, Query, QueryContext, QueryResultData, TransactionSelection},
 };
 use anyhow::{Context, Result};
 use arrow2::{
     array::{Array, BinaryArray, BooleanArray, MutableBooleanArray, UInt64Array, UInt8Array},
-    bitmap::{Bitmap, MutableBitmap},
+    bitmap::Bitmap,
     chunk::Chunk,
     compute,
     datatypes::{DataType, Schema},
@@ -20,8 +21,8 @@ use super::data_provider::{ArrowBatch, DataProvider};
 pub fn execute_query(provider: &dyn DataProvider, query: &Query) -> Result<QueryResultData> {
     let mut ctx = QueryContext {
         query: query.clone(),
-        block_set: BTreeSet::<u64>::new(),
-        transaction_set: BTreeSet::<(u64, u64)>::new(),
+        block_set: FastSet::<u64>::default(),
+        transaction_set: FastSet::<(u64, u64)>::default(),
     };
 
     let logs = if !query.logs.is_empty() {
@@ -66,8 +67,8 @@ pub fn execute_query(provider: &dyn DataProvider, query: &Query) -> Result<Query
 fn query_logs(
     data: Vec<ArrowBatch>,
     query: &Query,
-    tx_set: &mut BTreeSet<(u64, u64)>,
-    blk_set: &mut BTreeSet<u64>,
+    tx_set: &mut FastSet<(u64, u64)>,
+    blk_set: &mut FastSet<u64>,
 ) -> Result<Vec<ArrowBatch>> {
     let mut res = Vec::new();
 
@@ -165,8 +166,8 @@ fn log_selection_to_filter(
 fn query_transactions(
     data: Vec<ArrowBatch>,
     query: &Query,
-    tx_set: &BTreeSet<(u64, u64)>,
-    blk_set: &mut BTreeSet<u64>,
+    tx_set: &FastSet<(u64, u64)>,
+    blk_set: &mut FastSet<u64>,
 ) -> Result<Vec<ArrowBatch>> {
     let mut res = Vec::new();
 
@@ -262,7 +263,7 @@ fn tx_selection_to_filter(
 fn query_blocks(
     data: Vec<ArrowBatch>,
     query: &Query,
-    blk_set: &BTreeSet<u64>,
+    blk_set: &FastSet<u64>,
 ) -> Result<Vec<ArrowBatch>> {
     let mut res = Vec::new();
 
@@ -287,7 +288,7 @@ fn query_blocks(
 fn build_block_filter(
     batch: &ArrowBatch,
     query: &Query,
-    blk_set: &BTreeSet<u64>,
+    blk_set: &FastSet<u64>,
 ) -> Result<BooleanArray> {
     let block_number = batch.column::<UInt64Array>("number")?;
 
@@ -351,7 +352,7 @@ fn build_range_filter(block_number: &UInt64Array, query: &Query) -> BooleanArray
     range_filter
 }
 
-fn in_set_u64(data: &UInt64Array, set: &BTreeSet<u64>) -> BooleanArray {
+fn in_set_u64(data: &UInt64Array, set: &FastSet<u64>) -> BooleanArray {
     let mut bools = MutableBooleanArray::with_capacity(data.len());
 
     for val in data.iter() {
@@ -361,43 +362,32 @@ fn in_set_u64(data: &UInt64Array, set: &BTreeSet<u64>) -> BooleanArray {
     bools.into()
 }
 
-fn in_set_binary(data: &BinaryArray<i32>, set: &BTreeSet<&[u8]>) -> BooleanArray {
-    let mut bools = MutableBitmap::with_capacity(data.len());
+fn in_set_binary(data: &BinaryArray<i32>, set: &FastSet<&[u8]>) -> BooleanArray {
+    let mut bools = MutableBooleanArray::with_capacity(data.len());
 
-    for val in data.values_iter() {
-        bools.push(set.contains(val));
+    for val in data.iter() {
+        bools.push(val.map(|v| set.contains(v)));
     }
 
-    BooleanArray::new(DataType::Boolean, bools.into(), data.validity().cloned())
+    bools.into()
 }
 
 fn in_set_u64_double(
     left: &UInt64Array,
     right: &UInt64Array,
-    set: &BTreeSet<(u64, u64)>,
+    set: &FastSet<(u64, u64)>,
 ) -> BooleanArray {
     let len = left.len();
     assert_eq!(len, right.len());
 
-    let mut bools = MutableBitmap::with_capacity(left.len());
+    let mut bools = MutableBooleanArray::with_capacity(len);
 
-    for (&l, &r) in left.values_iter().zip(right.values_iter()) {
-        bools.push(set.contains(&(l, r)));
+    for (l, r) in left.iter().zip(right.iter()) {
+        let lr = l.and_then(|l| r.map(|r| (*l, *r)));
+        bools.push(lr.map(|lr| set.contains(&lr)));
     }
 
-    let validity = combine_validities(left.validity(), right.validity());
-
-    BooleanArray::new(DataType::Boolean, bools.into(), validity)
-}
-
-fn combine_validities(left: Option<&Bitmap>, right: Option<&Bitmap>) -> Option<Bitmap> {
-    match left {
-        Some(lv) => match right {
-            Some(rv) => Some(lv & rv),
-            None => Some(lv.clone()),
-        },
-        None => right.cloned(),
-    }
+    bools.into()
 }
 
 fn set_bool_array(len: usize) -> BooleanArray {
@@ -447,7 +437,7 @@ mod tests {
 
     #[test]
     fn test_in_set_u64() {
-        let set = [3, 1, 6, 9, 2, 2].into_iter().collect::<BTreeSet<_>>();
+        let set = [3, 1, 6, 9, 2, 2].into_iter().collect::<FastSet<_>>();
 
         let filter = in_set_u64(&UInt64Array::from_slice([3, 0, 0, 1, 6, 9, 2, 2, 0]), &set);
 
@@ -469,9 +459,7 @@ mod tests {
 
     #[test]
     fn test_in_set_u64_double() {
-        let set = [(3, 1), (6, 9), (2, 2)]
-            .into_iter()
-            .collect::<BTreeSet<_>>();
+        let set = [(3, 1), (6, 9), (2, 2)].into_iter().collect::<FastSet<_>>();
 
         let filter = in_set_u64_double(
             &UInt64Array::from_slice([3, 1, 6, 9, 2, 2]),
@@ -490,18 +478,6 @@ mod tests {
                 Some(true),
             ]
         );
-    }
-
-    #[test]
-    fn test_combine_validities() {
-        let left = Bitmap::from_u8_vec(vec![0xff, 0x00], 16);
-        let right = Bitmap::from_u8_vec(vec![0xf0, 0xff], 16);
-
-        let expected = Bitmap::from_u8_vec(vec![0xf0, 0x00], 16);
-
-        let res = combine_validities(Some(&left), Some(&right)).unwrap();
-
-        assert_eq!(res, expected);
     }
 
     #[test]
