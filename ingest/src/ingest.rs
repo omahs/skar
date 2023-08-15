@@ -161,6 +161,6 @@ impl Ingester {
 
         log::info!("finished initial sync");
 
-        Ok(to_block)
+        Ok(cmp::max(to_block, self.config.from_block))
     }
 }
