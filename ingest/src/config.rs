@@ -19,4 +19,8 @@ pub struct InnerConfig {
     pub concurrency_limit: NonZeroUsize,
     /// Batch size for Ethereum RPC requests
     pub batch_size: NonZeroUsize,
+    /// Offset from the blockchain tip.
+    /// Should be configured so ingestion stays behind the possible rollback range of the indexed chain
+    /// A sensible value for eth mainnet is 10
+    pub tip_offset: u64,
 }

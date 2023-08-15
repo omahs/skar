@@ -55,7 +55,7 @@ impl Ingester {
         log::info!("starting to wait for new blocks");
 
         loop {
-            if tip_block_num >= next_block {
+            if tip_block_num >= next_block + self.config.tip_offset {
                 let block = self.client.send(GetBlockByNumber(next_block.into()).into());
 
                 let receipts = self.client.send(GetBlockReceipts(next_block.into()).into());
@@ -102,7 +102,8 @@ impl Ingester {
         let to_block = self
             .get_block_num()
             .await
-            .context("get tip block num from rpc")?;
+            .context("get tip block num from rpc")?
+            .saturating_sub(self.config.tip_offset);
 
         let step: u64 = self.config.batch_size.get().try_into().unwrap();
 

@@ -70,6 +70,10 @@ from_block = 0
 concurrency_limit = 8
 # Batch size for Ethereum RPC requests
 batch_size = 100
+# Offset from the blockchain tip.
+# Should be configured so ingestion stays behind the possible rollback range of the indexed chain
+# A sensible value for eth mainnet is 10
+tip_offset = 10
 
 [ingest.rpc_client]
 # Timeout for Ethereum RPC requests
