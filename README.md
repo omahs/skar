@@ -4,6 +4,8 @@
 
 _**skar**_ is an indexer for Ethereum(EVM) data. It indexes the data and exposes a high-feature API.
 
+[telegram group](https://t.me/+w8HTPe0ZDa04ZTA0)
+
 ## Goals
 
 - Low system requirements compared to indexing the data on a traditional database. Less than 700GB for block headers, transactions, receipts and logs of ethereum mainnet.
