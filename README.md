@@ -19,9 +19,71 @@ to combine those keys (and maybe even some free endpoints) to have a premium and
 
 This project is currently in experimental stage. There will be minor breaking changes to the data format and the API.
 
-## Usage
+## Free to Use Ethereum Mainnet Instance
 
 Currently there is a free to use deployment of skar for ethereum mainnet. It can be reached on `http://91.216.245.118:1151/query`.
+
+Example request to get all transactions and erc20 transfers of an address:
+
+```json
+{
+  "from_block": 0,
+  "logs": [
+    {
+      "address": [],
+      "topics": [
+        [],
+        [],
+        [
+          "0x0000000000000000000000001e037f97d730Cc881e77F01E409D828b0bb14de0"
+        ]
+      ]
+    },
+    {
+      "address": [],
+      "topics": [
+        [],
+        [
+          "0x0000000000000000000000001e037f97d730Cc881e77F01E409D828b0bb14de0"
+        ],
+        []
+      ]
+    }
+  ],
+  "transactions": [
+    {
+      "from": [
+        "0x1e037f97d730Cc881e77F01E409D828b0bb14de0"
+      ]
+    },
+    {
+      "to": [
+        "0x1e037f97d730Cc881e77F01E409D828b0bb14de0"
+      ]
+    }
+  ],
+  "field_selection": {
+    "block": [
+      "number",
+      "timestamp",
+      "hash"
+    ],
+    "log": [
+      "data",
+      "address"
+    ],
+    "transaction": [
+      "hash",
+      "from",
+      "to",
+      "value",
+      "input"
+    ]
+  }
+}
+```
+
+## Usage
 
 If you have rust toolchain installed, you can install skar to path with:
 ```bash
