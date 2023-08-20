@@ -183,9 +183,8 @@ async fn run_ipc_query(
         let mut query_response =
             message.init_root::<skar_net_types_capnp::query_response::Builder>();
 
-        if let Some(height) = height {
-            query_response.set_archive_height(height);
-        }
+        let height: Option<i64> = height.map(|h| h.try_into().unwrap());
+        query_response.set_archive_height(height.unwrap_or(-1));
         query_response
             .set_total_execution_time(query_start.elapsed().as_millis().try_into().unwrap());
         query_response.set_next_block(next_block);

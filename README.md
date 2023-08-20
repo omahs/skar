@@ -165,6 +165,8 @@ get_logs_range_limit = 100
 batch_size_limit = 100
 
 [parquet]
+# compression option, can be Zstd or Lz4
+compression = "Lz4"
 # path to wirte/read the parquet files
 path = "data/parquet"
 

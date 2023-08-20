@@ -5,6 +5,10 @@ edition = "2021"
 
 [dependencies]
 capnp = "0.17.2"
+serde = { version = "1", features = ["derive"] }
+arrayvec = { version = "0.7", features = ["serde"] }
+
+skar-format = { path = "../format" }
 
 [build-dependencies]
 capnpc = "0.17.2"

@@ -13,7 +13,6 @@ impl RpcClient {
         let http_client = reqwest::Client::builder()
             .gzip(true)
             .timeout(Duration::from_millis(config.http_req_timeout_millis.get()))
-            .tcp_keepalive(Duration::from_secs(5))
             .build()
             .unwrap();
 

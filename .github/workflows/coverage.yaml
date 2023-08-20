@@ -17,8 +17,12 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v3
+      - name: Install Cap'n Proto
+        run: |
+            export DEBIAN_FRONTEND=noninteractive
+            sudo apt-get install -y capnproto libcapnp-dev
       - name: Install Rust
-        run: rustup toolchain install stable --component llvm-tools-preview
+        run: rustup toolchain install nightly --component llvm-tools-preview
       - name: Install cargo-llvm-cov
         uses: taiki-e/install-action@cargo-llvm-cov
       - uses: Swatinem/rust-cache@v1

@@ -1,7 +1,7 @@
 use std::{cmp, fs, path::Path, sync::Arc};
 
 use crate::{
-    config::{ParquetConfig, TableConfig},
+    config::{CompressionConfig, ParquetConfig, TableConfig},
     schema,
     state::{ArrowChunk, InMemory},
 };
@@ -15,7 +15,7 @@ use arrow2::{
     datatypes::{Schema, SchemaRef},
     io::parquet::write::{
         transverse, CompressionOptions, Encoding, FileWriter, RowGroupIterator, Version,
-        WriteOptions,
+        WriteOptions, ZstdLevel,
     },
 };
 
@@ -40,6 +40,7 @@ async fn write_parquet_file(
     path: &Path,
     schema: SchemaRef,
     table_cfg: &TableConfig,
+    compression: CompressionConfig,
 ) -> Result<()> {
     tokio::task::block_in_place(|| {
         let row_groups = prepare_row_groups(sort_indices, data, table_cfg.max_row_group_size)
@@ -54,15 +55,18 @@ async fn write_parquet_file(
         let row_groups = RowGroupIterator::try_new(
             row_groups.into_iter().map(Ok),
             &schema,
-            parquet_write_options(),
+            parquet_write_options(compression),
             encodings,
         )
         .context("create row groups")?;
 
         let mut buf = Vec::new();
-        let mut writer =
-            FileWriter::try_new(&mut buf, Schema::clone(&schema), parquet_write_options())
-                .context("create file writer")?;
+        let mut writer = FileWriter::try_new(
+            &mut buf,
+            Schema::clone(&schema),
+            parquet_write_options(compression),
+        )
+        .context("create file writer")?;
 
         for group in row_groups {
             writer.write(group.unwrap()).context("write file data")?;
@@ -166,6 +170,7 @@ pub(crate) async fn write_folder(
                 &path,
                 schema::block_header(),
                 &cfg.blocks,
+                cfg.compression,
             )
             .await
             .context("write blocks.parquet")?;
@@ -187,6 +192,7 @@ pub(crate) async fn write_folder(
                 &path,
                 schema::transaction(),
                 &cfg.transactions,
+                cfg.compression,
             )
             .await
             .context("write transactions.parquet")?;
@@ -205,6 +211,7 @@ pub(crate) async fn write_folder(
                 &path,
                 schema::log(),
                 &cfg.logs,
+                cfg.compression,
             )
             .await
             .context("write logs.parquet")?;
@@ -222,11 +229,16 @@ pub(crate) async fn write_folder(
     Ok(())
 }
 
-pub fn parquet_write_options() -> WriteOptions {
+pub fn parquet_write_options(compression: CompressionConfig) -> WriteOptions {
     WriteOptions {
         write_statistics: false,
         version: Version::V2,
-        compression: CompressionOptions::Lz4Raw,
+        compression: match compression {
+            CompressionConfig::Lz4 => CompressionOptions::Lz4Raw,
+            CompressionConfig::Zstd => {
+                CompressionOptions::Zstd(Some(ZstdLevel::try_new(9i32).unwrap()))
+            }
+        },
         data_pagesize_limit: Some(usize::MAX),
     }
 }

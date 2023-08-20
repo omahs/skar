@@ -7,7 +7,7 @@ struct QueryResponseData {
 }
 
 struct QueryResponse {
-	archiveHeight @0 :UInt64;
+	archiveHeight @0 :Int64;
 	nextBlock @1 :UInt64;
 	totalExecutionTime @2 :UInt64;
 	data @3 :QueryResponseData;

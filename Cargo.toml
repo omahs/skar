@@ -8,6 +8,7 @@ members = [
     "rpc-types",
     "ingest",
     "net-types",
+    "skar-client",
 ]
 
 [profile.maxperf]

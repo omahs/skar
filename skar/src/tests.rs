@@ -4,7 +4,7 @@ use serde::de::DeserializeOwned;
 use skar_ingest::BatchData;
 
 use crate::{
-    config::{ParquetConfig, TableConfig},
+    config::{CompressionConfig, ParquetConfig, TableConfig},
     schema::data_to_batches,
     state::{InMemory, InMemoryTable},
     validate_parquet::validate_parquet_folder_data,
@@ -62,6 +62,7 @@ async fn test_read_write_validate() {
         &tmp,
         &ParquetConfig {
             path: "".into(),
+            compression: CompressionConfig::Zstd,
             blocks: TableConfig {
                 max_file_size: 69,
                 max_row_group_size: 69,

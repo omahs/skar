@@ -39,6 +39,8 @@ pub struct HttpServerConfig {
 
 #[derive(Serialize, Deserialize)]
 pub struct ParquetConfig {
+    /// Compression option for parquet files
+    pub compression: CompressionConfig,
     /// path to the directory of parquet files
     pub path: PathBuf,
     /// config for block parquet files
@@ -67,4 +69,10 @@ pub struct TableConfig {
 pub struct DbConfig {
     /// Path to the database directory
     pub path: PathBuf,
+}
+
+#[derive(Clone, Copy, Debug, Serialize, Deserialize)]
+pub enum CompressionConfig {
+    Zstd,
+    Lz4,
 }
