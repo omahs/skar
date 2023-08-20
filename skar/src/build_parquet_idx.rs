@@ -202,14 +202,8 @@ fn load_file(path: &Path) -> Result<Vec<ArrowChunk>> {
     let mut reader = File::open(path).context("open parquet file")?;
     let metadata = parquet::read::read_metadata(&mut reader).context("read metadata")?;
     let schema = parquet::read::infer_schema(&metadata).context("infer schema")?;
-    let chunks = parquet::read::FileReader::new(
-        reader,
-        metadata.row_groups,
-        schema.clone(),
-        None,
-        None,
-        None,
-    );
+    let chunks =
+        parquet::read::FileReader::new(reader, metadata.row_groups, schema, None, None, None);
 
     chunks
         .into_iter()

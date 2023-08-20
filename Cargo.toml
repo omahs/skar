@@ -1,10 +1,13 @@
 [workspace]
+resolver = "2"
+
 members = [
     "skar",
     "format",
     "rpc-client",
     "rpc-types",
     "ingest",
+    "net-types",
 ]
 
 [profile.maxperf]

@@ -1,0 +1,10 @@
+[package]
+name = "skar-net-types"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+capnp = "0.17.2"
+
+[build-dependencies]
+capnpc = "0.17.2"

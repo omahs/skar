@@ -1,3 +1,5 @@
+use std::collections::BTreeSet;
+use std::io::Cursor;
 use std::io::Write;
 use std::sync::Arc;
 use std::time::Instant;
@@ -9,17 +11,20 @@ use arrow2::array::Utf8Array;
 use arrow2::datatypes::DataType;
 use arrow2::datatypes::Field;
 use arrow2::datatypes::Schema;
+use arrow2::io::ipc;
 use arrow2::io::json::write::RecordSerializer;
 use axum::extract::Json as ReqJson;
 use axum::extract::State as AxumState;
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Json, Response};
+use skar_net_types::skar_net_types_capnp;
 use tower::ServiceBuilder;
 use tower_http::compression::CompressionLayer;
 
 use crate::config::HttpServerConfig;
 use crate::query::ArrowBatch;
 use crate::query::Handler;
+use crate::schema;
 use crate::state::ArrowChunk;
 use crate::types::{Query, QueryResultData};
 use crate::write_parquet::concat_chunks;
@@ -41,7 +46,14 @@ pub(crate) async fn run(cfg: HttpServerConfig, handler: Arc<Handler>) -> anyhow:
             "/height",
             axum::routing::get(get_height).with_state(state.clone()),
         )
-        .route("/query", axum::routing::post(run_query).with_state(state))
+        .route(
+            "/query",
+            axum::routing::post(run_json_query).with_state(state.clone()),
+        )
+        .route(
+            "/query/arrow-ipc",
+            axum::routing::post(run_ipc_query).with_state(state),
+        )
         .layer(ServiceBuilder::new().layer(CompressionLayer::new()));
     axum::Server::bind(&addr)
         .serve(app.into_make_service())
@@ -63,7 +75,161 @@ async fn get_height(
     })))
 }
 
-async fn run_query(
+async fn run_ipc_query(
+    AxumState(state): AxumState<Arc<ServerState>>,
+    ReqJson(query): ReqJson<Query>,
+) -> Result<Response, AppError> {
+    let query_start = Instant::now();
+
+    let field_selection = query.field_selection.clone();
+
+    let mut rx = state
+        .handler
+        .clone()
+        .handle(query)
+        .context("start running query")?;
+
+    let write_opts = ipc::write::WriteOptions {
+        compression: Some(ipc::write::Compression::ZSTD),
+    };
+
+    let mut blocks_writer = ipc::write::FileWriter::new(
+        Cursor::new(Vec::with_capacity(512)),
+        project_schema(&schema::block_header(), &field_selection.block)
+            .context("project schema")?,
+        None,
+        write_opts,
+    );
+    blocks_writer.start().context("start writer")?;
+
+    let mut transactions_writer = ipc::write::FileWriter::new(
+        Cursor::new(Vec::with_capacity(512)),
+        project_schema(&schema::transaction(), &field_selection.transaction)
+            .context("project schema")?,
+        None,
+        write_opts,
+    );
+    transactions_writer.start().context("start writer")?;
+
+    let mut logs_writer = ipc::write::FileWriter::new(
+        Cursor::new(Vec::with_capacity(512)),
+        project_schema(&schema::log(), &field_selection.log).context("project schema")?,
+        None,
+        write_opts,
+    );
+    logs_writer.start().context("start writer")?;
+
+    let mut next_block = 0;
+
+    while let Some(res) = rx.recv().await {
+        let query_result = res.context("execute parquet query")?;
+        let data = query_result.data;
+
+        if !data.blocks.is_empty() {
+            for chunk in data.blocks.iter() {
+                blocks_writer
+                    .write(&chunk.chunk, None)
+                    .context("write blocks")?;
+            }
+        }
+
+        if !data.transactions.is_empty() {
+            for chunk in data.transactions.iter() {
+                transactions_writer
+                    .write(&chunk.chunk, None)
+                    .context("write transactions")?;
+            }
+        }
+
+        if !data.logs.is_empty() {
+            for chunk in data.logs.iter() {
+                logs_writer
+                    .write(&chunk.chunk, None)
+                    .context("write logs")?;
+            }
+        }
+
+        next_block = query_result.next_block;
+
+        if blocks_writer.inner().position()
+            + transactions_writer.inner().position()
+            + logs_writer.inner().position()
+            >= (state.cfg.response_size_limit_mb * MEGABYTES)
+                .try_into()
+                .unwrap()
+        {
+            break;
+        }
+    }
+
+    blocks_writer.finish().context("finish blocks")?;
+    transactions_writer
+        .finish()
+        .context("finish transactions")?;
+    logs_writer.finish().context("finish logs")?;
+
+    let blocks = blocks_writer.into_inner().into_inner();
+    let transactions = transactions_writer.into_inner().into_inner();
+    let logs = logs_writer.into_inner().into_inner();
+
+    let height = state
+        .handler
+        .archive_height()
+        .await
+        .context("get archive height")?;
+
+    let mut message = capnp::message::Builder::new_default();
+    {
+        let mut query_response =
+            message.init_root::<skar_net_types_capnp::query_response::Builder>();
+
+        if let Some(height) = height {
+            query_response.set_archive_height(height);
+        }
+        query_response
+            .set_total_execution_time(query_start.elapsed().as_millis().try_into().unwrap());
+        query_response.set_next_block(next_block);
+
+        let mut data = query_response.init_data();
+        data.set_blocks(&blocks);
+        data.set_transactions(&transactions);
+        data.set_logs(&logs);
+    }
+
+    let mut resp_body = Vec::with_capacity(512);
+    capnp::serialize_packed::write_message(&mut resp_body, &message)
+        .context("write capnp message")?;
+
+    Ok(resp_body.into_response())
+}
+
+fn project_schema(
+    schema: &Schema,
+    field_selection: &BTreeSet<String>,
+) -> Result<Schema, anyhow::Error> {
+    let mut select_indices = Vec::new();
+    for col_name in field_selection.iter() {
+        let (idx, _) = schema
+            .fields
+            .iter()
+            .enumerate()
+            .find(|(_, f)| &f.name == col_name)
+            .context(format!("couldn't find column {col_name} in schema"))?;
+        select_indices.push(idx);
+    }
+
+    let schema: Schema = schema
+        .fields
+        .iter()
+        .filter(|f| field_selection.contains(&f.name))
+        .cloned()
+        .collect::<Vec<_>>()
+        .into();
+
+    Ok(schema)
+}
+
+async fn run_json_query(
     AxumState(state): AxumState<Arc<ServerState>>,
     ReqJson(query): ReqJson<Query>,
 ) -> Result<Response, AppError> {
