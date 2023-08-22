@@ -30,11 +30,15 @@ pub struct QueryConfig {
 pub struct HttpServerConfig {
     /// Socket address to serve the http server from
     pub addr: SocketAddr,
-    /// Response size limit for the http requests.
+    /// Limit for amount of logs in a single response.
     ///
-    /// If reponse payload reaches this size, the query will stop and
+    /// If reponse payload reaches this limit, the query will stop and
     /// the payload will be returned to client.
-    pub response_size_limit_mb: usize,
+    pub response_num_logs_limit: usize,
+    /// Limit for amount of transactions in a single response.
+    pub response_num_transactions_limit: usize,
+    /// Limit for amount of blocks in a single response.
+    pub response_num_blocks_limit: usize,
 }
 
 #[derive(Serialize, Deserialize)]

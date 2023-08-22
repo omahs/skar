@@ -20,6 +20,7 @@ use crate::{
 
 type Data = Vec<ArrowBatch>;
 
+#[derive(Clone)]
 pub struct ArrowBatch {
     pub chunk: Arc<ArrowChunk>,
     pub schema: SchemaRef,

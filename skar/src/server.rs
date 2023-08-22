@@ -18,6 +18,7 @@ use axum::extract::State as AxumState;
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Json, Response};
 use skar_net_types::skar_net_types_capnp;
+use skar_net_types::FieldSelection;
 use tower::ServiceBuilder;
 use tower_http::compression::CompressionLayer;
 
@@ -26,6 +27,7 @@ use crate::query::ArrowBatch;
 use crate::query::Handler;
 use crate::schema;
 use crate::state::ArrowChunk;
+use crate::types::QueryResult;
 use crate::types::{Query, QueryResultData};
 use crate::write_parquet::concat_chunks;
 
@@ -33,8 +35,6 @@ struct ServerState {
     cfg: HttpServerConfig,
     handler: Arc<Handler>,
 }
-
-const MEGABYTES: usize = 1024 * 1024;
 
 pub(crate) async fn run(cfg: HttpServerConfig, handler: Arc<Handler>) -> anyhow::Result<()> {
     let addr = cfg.addr;
@@ -75,12 +75,130 @@ async fn get_height(
     })))
 }
 
+struct IpcResponseBuilder {
+    blocks: Vec<ArrowBatch>,
+    transactions: Vec<ArrowBatch>,
+    logs: Vec<ArrowBatch>,
+    next_block: u64,
+    counts: ResponseEntityCounts,
+    query_start: Instant,
+}
+
+impl Default for IpcResponseBuilder {
+    fn default() -> Self {
+        Self {
+            blocks: Default::default(),
+            transactions: Default::default(),
+            logs: Default::default(),
+            next_block: 0,
+            counts: Default::default(),
+            query_start: Instant::now(),
+        }
+    }
+}
+
+impl IpcResponseBuilder {
+    fn add_result(&mut self, res: &QueryResult) {
+        self.counts.add_counts(&res.data);
+        self.next_block = res.next_block;
+
+        self.blocks.extend_from_slice(&res.data.blocks);
+        self.transactions.extend_from_slice(&res.data.transactions);
+        self.logs.extend_from_slice(&res.data.logs);
+    }
+
+    fn build(
+        self,
+        field_selection: &FieldSelection,
+        height: Option<u64>,
+    ) -> anyhow::Result<Vec<u8>> {
+        let blocks_ipc = Self::build_ipc_file(
+            &schema::block_header(),
+            &field_selection.block,
+            &self.blocks,
+        )
+        .context("write blocks to arrow ipc")?;
+        let transactions_ipc = Self::build_ipc_file(
+            &schema::transaction(),
+            &field_selection.transaction,
+            &self.transactions,
+        )
+        .context("write transactions to arrow ipc")?;
+        let logs_ipc = Self::build_ipc_file(&schema::log(), &field_selection.log, &self.logs)
+            .context("write logs to arrow ipc")?;
+        self.build_capnp_message(height, blocks_ipc, transactions_ipc, logs_ipc)
+            .context("write capnp message")
+    }
+
+    fn build_ipc_file(
+        schema: &Schema,
+        field_selection: &BTreeSet<String>,
+        data: &[ArrowBatch],
+    ) -> anyhow::Result<Vec<u8>> {
+        let write_opts = ipc::write::WriteOptions {
+            compression: Some(ipc::write::Compression::ZSTD),
+        };
+
+        let mut writer = ipc::write::FileWriter::new(
+            Cursor::new(Vec::with_capacity(512)),
+            project_schema(schema, field_selection).context("project schema")?,
+            None,
+            write_opts,
+        );
+        writer.start().context("start writer")?;
+
+        if !data.is_empty() {
+            let chunks = data
+                .iter()
+                .map(|batch| batch.chunk.clone())
+                .collect::<Vec<_>>();
+
+            let chunk = concat_chunks(&chunks).context("concatenate arrow chunks")?;
+
+            writer
+                .write(&chunk, None)
+                .context("write arrow batch to ipc")?;
+        }
+
+        writer.finish().context("finish logs")?;
+
+        Ok(writer.into_inner().into_inner())
+    }
+
+    fn build_capnp_message(
+        &self,
+        height: Option<u64>,
+        blocks: Vec<u8>,
+        transactions: Vec<u8>,
+        logs: Vec<u8>,
+    ) -> anyhow::Result<Vec<u8>> {
+        let mut message = capnp::message::Builder::new_default();
+        let mut query_response =
+            message.init_root::<skar_net_types_capnp::query_response::Builder>();
+
+        let height: Option<i64> = height.map(|h| h.try_into().unwrap());
+        query_response.set_archive_height(height.unwrap_or(-1));
+        query_response
+            .set_total_execution_time(self.query_start.elapsed().as_millis().try_into().unwrap());
+        query_response.set_next_block(self.next_block);
+
+        let mut data = query_response.init_data();
+        data.set_blocks(&blocks);
+        data.set_transactions(&transactions);
+        data.set_logs(&logs);
+
+        let mut resp_body = Vec::with_capacity(512);
+        capnp::serialize_packed::write_message(&mut resp_body, &message)
+            .context("write packed capnp message")?;
+
+        Ok(resp_body)
+    }
+}
+
 async fn run_ipc_query(
     AxumState(state): AxumState<Arc<ServerState>>,
     ReqJson(query): ReqJson<Query>,
 ) -> Result<Response, AppError> {
-    let query_start = Instant::now();
-
     let field_selection = query.field_selection.clone();
 
     let mut rx = state
@@ -89,115 +207,25 @@ async fn run_ipc_query(
         .handle(query)
         .context("start running query")?;
 
-    let write_opts = ipc::write::WriteOptions {
-        compression: Some(ipc::write::Compression::ZSTD),
-    };
-
-    let mut blocks_writer = ipc::write::FileWriter::new(
-        Cursor::new(Vec::with_capacity(512)),
-        project_schema(&schema::block_header(), &field_selection.block)
-            .context("project schema")?,
-        None,
-        write_opts,
-    );
-    blocks_writer.start().context("start writer")?;
-
-    let mut transactions_writer = ipc::write::FileWriter::new(
-        Cursor::new(Vec::with_capacity(512)),
-        project_schema(&schema::transaction(), &field_selection.transaction)
-            .context("project schema")?,
-        None,
-        write_opts,
-    );
-    transactions_writer.start().context("start writer")?;
-
-    let mut logs_writer = ipc::write::FileWriter::new(
-        Cursor::new(Vec::with_capacity(512)),
-        project_schema(&schema::log(), &field_selection.log).context("project schema")?,
-        None,
-        write_opts,
-    );
-    logs_writer.start().context("start writer")?;
-
-    let mut next_block = 0;
+    let mut response_builder = IpcResponseBuilder::default();
 
     while let Some(res) = rx.recv().await {
         let query_result = res.context("execute parquet query")?;
-        let data = query_result.data;
+        response_builder.add_result(&query_result);
 
-        if !data.blocks.is_empty() {
-            for chunk in data.blocks.iter() {
-                blocks_writer
-                    .write(&chunk.chunk, None)
-                    .context("write blocks")?;
-            }
-        }
-
-        if !data.transactions.is_empty() {
-            for chunk in data.transactions.iter() {
-                transactions_writer
-                    .write(&chunk.chunk, None)
-                    .context("write transactions")?;
-            }
-        }
-
-        if !data.logs.is_empty() {
-            for chunk in data.logs.iter() {
-                logs_writer
-                    .write(&chunk.chunk, None)
-                    .context("write logs")?;
-            }
-        }
-
-        next_block = query_result.next_block;
-
-        if blocks_writer.inner().position()
-            + transactions_writer.inner().position()
-            + logs_writer.inner().position()
-            >= (state.cfg.response_size_limit_mb * MEGABYTES)
-                .try_into()
-                .unwrap()
-        {
+        if response_builder.counts.is_limit_reached(&state.cfg) {
             break;
         }
     }
-
-    blocks_writer.finish().context("finish blocks")?;
-    transactions_writer
-        .finish()
-        .context("finish transactions")?;
-    logs_writer.finish().context("finish logs")?;
-
-    let blocks = blocks_writer.into_inner().into_inner();
-    let transactions = transactions_writer.into_inner().into_inner();
-    let logs = logs_writer.into_inner().into_inner();
 
     let height = state
         .handler
         .archive_height()
         .await
         .context("get archive height")?;
-
-    let mut message = capnp::message::Builder::new_default();
-    {
-        let mut query_response =
-            message.init_root::<skar_net_types_capnp::query_response::Builder>();
-
-        let height: Option<i64> = height.map(|h| h.try_into().unwrap());
-        query_response.set_archive_height(height.unwrap_or(-1));
-        query_response
-            .set_total_execution_time(query_start.elapsed().as_millis().try_into().unwrap());
-        query_response.set_next_block(next_block);
-
-        let mut data = query_response.init_data();
-        data.set_blocks(&blocks);
-        data.set_transactions(&transactions);
-        data.set_logs(&logs);
-    }
-
-    let mut resp_body = Vec::with_capacity(512);
-    capnp::serialize_packed::write_message(&mut resp_body, &message)
-        .context("write capnp message")?;
+    let resp_body = response_builder
+        .build(&field_selection, height)
+        .context("build response")?;
 
     Ok(resp_body.into_response())
 }
@@ -228,6 +256,36 @@ fn project_schema(
     Ok(schema)
 }
 
+#[derive(Debug, Clone, Copy, Default)]
+struct ResponseEntityCounts {
+    blocks: usize,
+    transactions: usize,
+    logs: usize,
+}
+
+impl ResponseEntityCounts {
+    fn add_counts(&mut self, data: &QueryResultData) {
+        self.blocks += data
+            .blocks
+            .iter()
+            .fold(0, |acc, batch| acc + batch.chunk.len());
+        self.transactions += data
+            .transactions
+            .iter()
+            .fold(0, |acc, batch| acc + batch.chunk.len());
+        self.logs += data
+            .logs
+            .iter()
+            .fold(0, |acc, batch| acc + batch.chunk.len());
+    }
+
+    fn is_limit_reached(&self, cfg: &HttpServerConfig) -> bool {
+        self.blocks >= cfg.response_num_blocks_limit
+            || self.transactions >= cfg.response_num_transactions_limit
+            || self.logs >= cfg.response_num_logs_limit
+    }
+}
+
 async fn run_json_query(
     AxumState(state): AxumState<Arc<ServerState>>,
     ReqJson(query): ReqJson<Query>,
@@ -243,16 +301,19 @@ async fn run_json_query(
     let mut bytes = br#"{"data":["#.to_vec();
 
     let mut next_block = 0;
+    let mut counts = ResponseEntityCounts::default();
 
     let mut put_comma = false;
     while let Some(res) = rx.recv().await {
         let query_result = res.context("execute parquet query")?;
 
+        counts.add_counts(&query_result.data);
+
         put_comma |= extend_bytes_with_data(put_comma, &mut bytes, &query_result.data)?;
 
         next_block = query_result.next_block;
 
-        if bytes.len() >= state.cfg.response_size_limit_mb * MEGABYTES {
+        if counts.is_limit_reached(&state.cfg) {
             break;
         }
     }
