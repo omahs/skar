@@ -96,8 +96,10 @@ impl Write {
                     .await
                     .context("write temp parquet folder")?;
 
-                validate_parquet_folder_data(&temp_path)
-                    .context("validate parquet folder after writing")?;
+                if !self.parquet_config.disable_validation {
+                    validate_parquet_folder_data(&temp_path)
+                        .context("validate parquet folder after writing")?;
+                }
 
                 let mut final_path = self.parquet_config.path.clone();
                 final_path.push(format!("{}-{}", from_block, to_block,));

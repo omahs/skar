@@ -75,6 +75,7 @@ async fn test_read_write_validate() {
                 max_file_size: 69,
                 max_row_group_size: 69,
             },
+            disable_validation: false,
         },
     )
     .await

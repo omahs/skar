@@ -43,6 +43,8 @@ pub struct HttpServerConfig {
 
 #[derive(Serialize, Deserialize)]
 pub struct ParquetConfig {
+    /// Disable parquet file validation
+    pub disable_validation: bool,
     /// Compression option for parquet files
     pub compression: CompressionConfig,
     /// path to the directory of parquet files

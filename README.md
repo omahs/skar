@@ -145,6 +145,8 @@ batch_size = 100
 # Should be configured so ingestion stays behind the possible rollback range of the indexed chain
 # A sensible value for eth mainnet is 10
 tip_offset = 10
+# Disable RPC data validation
+disable_validation = false
 
 [ingest.rpc_client]
 # Timeout for Ethereum RPC requests
@@ -176,6 +178,8 @@ batch_size_limit = 100
 compression = "Lz4"
 # path to wirte/read the parquet files
 path = "data/parquet"
+# Disable parquet file validation
+disable_validation = false
 
 [parquet.blocks]
 # Maximum number of blocks per parquet folder

@@ -82,7 +82,9 @@ impl Ingester {
                     to_block: next_block + 1,
                 };
 
-                validate_batch_data(&data).context("validate batch data")?;
+                if !self.config.disable_validation {
+                    validate_batch_data(&data).context("validate batch data")?;
+                }
 
                 if self.data_tx.send(data).await.is_err() {
                     log::warn!("quitting ingest loop because the receiver is dropped");
@@ -156,7 +158,9 @@ impl Ingester {
         while let Some(data) = data_stream.next().await {
             let data = data?;
 
-            validate_batch_data(&data).context("validate data")?;
+            if !self.config.disable_validation {
+                validate_batch_data(&data).context("validate batch data")?;
+            }
 
             if self.data_tx.send(data).await.is_err() {
                 log::warn!("no one is listening so quitting ingest loop.");
