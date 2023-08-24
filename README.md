@@ -87,6 +87,11 @@ Example request to get all transactions and erc20 transfers of an address:
 
 ## Usage
 
+It is required to have capnp tool installed in order to build skar. You can install it with a command like this (on ubuntu):
+```bash
+sudo apt-get install -y capnproto libcapnp-dev
+```
+
 If you have rust toolchain installed, you can install skar to path with:
 ```bash
 make install
@@ -116,11 +121,13 @@ time_limit_ms = 5000
 [http_server]
 # Socket address to serve the http server from
 addr = "127.0.0.1:1131"
-# Response size limit for the http requests.
+# Response size limits for the http requests.
 #
-# If reponse payload reaches this size, the query will stop and
+# If reponse payload reaches one of these limits, the query will stop and
 # the payload will be returned to client. 
-response_size_limit_mb = 30
+response_num_logs_limit = 50000
+response_num_transactions_limit = 50000
+response_num_blocks_limit = 50000
 
 [db]
 # Path to the database directory
