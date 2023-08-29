@@ -5,7 +5,7 @@ use crate::{
     config::{Config, ParquetConfig},
     db::{BlockRange, Db},
     query::Handler,
-    schema::data_to_batches,
+    schema::{data_to_batches, Batches},
     server,
     state::{InMemory, State},
     validate_parquet::validate_parquet_folder_data,
@@ -129,7 +129,26 @@ impl Write {
                 current_block_hash = self.execute_rollback().await.context("execute rollback")?;
             } else {
                 current_block_hash = data.blocks[0].header.hash.clone();
-                self.process_data(data)
+
+                let mut data = data;
+                let batches = loop {
+                    match data_to_batches(data) {
+                        Ok(data) => break data,
+                        Err(e) => {
+                            log::warn!("failed to construct data from batches: {:?}", e);
+                            log::warn!("failed to construct data from batches: {:?}", e);
+                            tokio::time::sleep(Duration::from_secs(1)).await;
+                            log::warn!("retrying to get data");
+                            data = self
+                                .get_block_data(next_block)
+                                .await
+                                .context("get block data")?;
+                            continue;
+                        }
+                    }
+                };
+
+                self.process_data(batches)
                     .await
                     .context("process downloaded data")?;
             }
@@ -173,9 +192,9 @@ impl Write {
                     let batches = match data_to_batches(data) {
                         Ok(batches) => batches,
                         Err(e) => {
-                            log::info!("failed to construct data from batches: {}", e);
+                            log::warn!("failed to construct data from batches: {:?}", e);
                             tokio::time::sleep(Duration::from_secs(1)).await;
-                            log::info!("retrying to get data");
+                            log::warn!("retrying to get data");
                             continue;
                         }
                     };
@@ -254,7 +273,8 @@ impl Write {
 
     async fn initial_sync(&mut self) -> Result<()> {
         while let Ok(data) = self.ingest.recv().await {
-            self.process_data(data)
+            let batches = data_to_batches(data).context("construct arrow batches from data")?;
+            self.process_data(batches)
                 .await
                 .context("process initial sync data")?;
         }
@@ -262,7 +282,7 @@ impl Write {
         Ok(())
     }
 
-    async fn process_data(&mut self, data: BatchData) -> Result<()> {
+    async fn process_data(&mut self, batches: Batches) -> Result<()> {
         let mut in_mem = InMemory::clone(&self.state.in_mem.load());
 
         let mut new_in_mem = in_mem.split_off_num_blocks(self.maximum_rollback_depth);
@@ -337,10 +357,8 @@ impl Write {
         log::debug!("in_mem.from_block: {}", in_mem.from_block);
         log::debug!("in_mem.to_block: {}", in_mem.to_block);
 
-        in_mem.from_block = cmp::min(data.from_block, in_mem.from_block);
-        in_mem.to_block = cmp::max(data.to_block, in_mem.to_block);
-
-        let batches = data_to_batches(data).context("construct data from batches")?;
+        in_mem.from_block = cmp::min(batches.from_block, in_mem.from_block);
+        in_mem.to_block = cmp::max(batches.to_block, in_mem.to_block);
 
         in_mem.blocks.extend(batches.blocks.into());
         in_mem.transactions.extend(batches.transactions.into());

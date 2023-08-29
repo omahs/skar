@@ -112,9 +112,14 @@ pub struct Batches {
     pub blocks: ArrowChunk,
     pub transactions: ArrowChunk,
     pub logs: ArrowChunk,
+    pub from_block: u64,
+    pub to_block: u64,
 }
 
 pub fn data_to_batches(mut data: BatchData) -> Result<Batches> {
+    let from_block = data.from_block;
+    let to_block = data.to_block;
+
     let mut b_number = UInt64Vec::new();
     let mut b_hash = hash_builder();
     let mut b_parent_hash = hash_builder();
@@ -338,5 +343,7 @@ pub fn data_to_batches(mut data: BatchData) -> Result<Batches> {
         logs,
         blocks,
         transactions,
+        from_block,
+        to_block,
     })
 }
