@@ -12,7 +12,7 @@ _**skar**_ is an indexer for Ethereum(EVM) data. It indexes the data and exposes
 - High query performance that is based on efficient indexing of the data and usage of Apache Arrow/Parquet.
 - High ingestion speed only limited by the source/network.
 - ApacheArrow/GRPC based api. This will help with efficiency because it is lighter than json over http (Work In Progress).
-- Open source software and easy deployment. Anyone should be able to deploy with ease and preffered configuration.
+- Open source software and easy deployment. Anyone should be able to deploy with ease and preferred configuration.
 - Flexible ingestion from multiple sources with different limiting configurations. This will allow someone with a bunch of limited keys from RPC providers
 to combine those keys (and maybe even some free endpoints) to have a premium and zero downtime experience (Work In Progress). This is WIP because currently skar requires the `eth_getBlockReceipts` method to be available on the source, many RPC providers and node implementations don't implement this.
 - Index multiple chains with a single _**skar**_ instance. This will allow users to index many chains without running and maintaining many instances of _**skar**_ (Work In Progress).
@@ -128,7 +128,7 @@ time_limit_ms = 5000
 addr = "127.0.0.1:1131"
 # Response size limits for the http requests.
 #
-# If reponse payload reaches one of these limits, the query will stop and
+# If response payload reaches one of these limits, the query will stop and
 # the payload will be returned to client. 
 response_num_logs_limit = 50000
 response_num_transactions_limit = 50000
@@ -177,7 +177,7 @@ batch_size_limit = 100
 [parquet]
 # compression option, can be Zstd or Lz4
 compression = "Lz4"
-# path to wirte/read the parquet files
+# path to write/read the parquet files
 path = "data/parquet"
 # Disable parquet file validation
 disable_validation = false
