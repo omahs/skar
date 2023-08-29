@@ -5,6 +5,8 @@ use skar_ingest::IngestConfig;
 
 #[derive(Serialize, Deserialize)]
 pub struct Config {
+    /// Maximum rollback depth of the indexed chain.
+    pub maximum_rollback_depth: u64,
     /// Ingestion config
     pub ingest: IngestConfig,
     /// Config for parquet files

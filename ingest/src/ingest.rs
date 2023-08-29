@@ -14,7 +14,7 @@ pub struct Ingest {
 }
 
 impl Ingest {
-    pub fn spawn(config: IngestConfig) -> Self {
+    pub fn spawn(config: IngestConfig, max_rollback_depth: u64) -> Self {
         let (data_tx, data_rx) = mpsc::channel(4);
 
         let client = RpcClient::new(config.rpc_client).into();
@@ -24,6 +24,7 @@ impl Ingest {
                 client,
                 data_tx,
                 config: config.inner,
+                max_rollback_depth,
             }
             .ingest()
             .await;
@@ -45,6 +46,7 @@ struct Ingester {
     client: Arc<RpcClient>,
     data_tx: mpsc::Sender<BatchData>,
     config: InnerConfig,
+    max_rollback_depth: u64,
 }
 
 impl Ingester {
@@ -54,60 +56,19 @@ impl Ingester {
             tokio::time::sleep(Duration::from_millis(1000)).await;
         }
 
-        let mut next_block = self.initial_sync().await.context("run initial sync")?;
-        let mut tip_block_num = 0;
-
-        log::info!("starting to wait for new blocks");
-
-        loop {
-            if tip_block_num >= next_block + self.config.tip_offset {
-                let block = self.client.send(GetBlockByNumber(next_block.into()).into());
-
-                let receipts = self.client.send(GetBlockReceipts(next_block.into()).into());
-
-                let (block, receipts) = futures::join!(block, receipts);
-
-                let block = block.context("get block data")?.try_into_single().unwrap();
-                let receipts = receipts
-                    .context("get block receipts")?
-                    .try_into_single()
-                    .unwrap();
-
-                log::trace!("downloaded data for block {}", next_block);
-
-                let data = BatchData {
-                    blocks: vec![block],
-                    receipts: vec![receipts],
-                    from_block: next_block,
-                    to_block: next_block + 1,
-                };
-
-                if !self.config.disable_validation {
-                    validate_batch_data(&data).context("validate batch data")?;
-                }
-
-                if self.data_tx.send(data).await.is_err() {
-                    log::warn!("quitting ingest loop because the receiver is dropped");
-                    break;
-                }
-
-                next_block += 1;
-            } else {
-                tokio::time::sleep(Duration::from_millis(100)).await;
-
-                tip_block_num = self.client.last_block().await;
-            }
-        }
+        self.initial_sync(self.max_rollback_depth)
+            .await
+            .context("run initial sync")?;
 
         Ok(())
     }
 
-    async fn initial_sync(&self) -> Result<u64> {
+    async fn initial_sync(&self, max_rollback_depth: u64) -> Result<u64> {
         let to_block = self
             .client
             .last_block()
             .await
-            .saturating_sub(self.config.tip_offset);
+            .saturating_sub(max_rollback_depth);
 
         let step: u64 = self.config.batch_size.get().try_into().unwrap();
 

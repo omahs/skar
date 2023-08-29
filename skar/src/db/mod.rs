@@ -122,12 +122,12 @@ impl Db {
                 Some(u32::from_be_bytes(offset))
             }
             None => {
-                if folder_index.block_range.0 != 0 {
-                    return Err(anyhow!(
-                        "there are no blocks in db but folder_index.from={}",
-                        folder_index.block_range.0
-                    ));
-                }
+                // if folder_index.block_range.0 != 0 {
+                //     return Err(anyhow!(
+                //         "there are no blocks in db but folder_index.from={}",
+                //         folder_index.block_range.0
+                //     ));
+                // }
 
                 None
             }
@@ -423,22 +423,6 @@ mod tests {
             row_group_index_path,
             env: Environment::new().open(&db_path).unwrap(),
         };
-
-        let err_res = db.insert_folder_index_impl(
-            FolderIndex {
-                block_range: BlockRange(1, 123456),
-                address_filter: BloomFilter(Filter::new(8, 10000)),
-                topic_filter: BloomFilter(Filter::new(31, 69)),
-                row_group_index_offset: 0,
-            },
-            RowGroupIndex {
-                block: Vec::new(),
-                transaction: Vec::new(),
-                log: Vec::new(),
-            },
-        );
-
-        assert!(err_res.is_err());
 
         db.insert_folder_index_impl(
             FolderIndex {

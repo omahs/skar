@@ -42,18 +42,7 @@ impl Handler {
     pub async fn archive_height(&self) -> Result<Option<u64>> {
         let to_block = self.state.in_mem.load().to_block;
         if to_block > 0 {
-            return Ok(Some(to_block - 1));
-        }
-
-        let next_block_num = self
-            .state
-            .db
-            .next_block_num()
-            .await
-            .context("get next block num from db")?;
-
-        if next_block_num > 0 {
-            Ok(Some(next_block_num - 1))
+            Ok(Some(to_block - 1))
         } else {
             Ok(None)
         }

@@ -1949,6 +1949,7 @@ dependencies = [
  "skar-format",
  "skar-ingest",
  "skar-net-types",
+ "skar-rpc-client",
  "tokio",
  "toml",
  "tower",

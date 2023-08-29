@@ -111,6 +111,11 @@ Skar is recommended to be installed and run as a service. This can be done via `
 #### Example Configuration File (TOML)
 
 ```toml
+# Maximum depth of rollbacks in the chain that we want to sync.
+# 10 works for ethereum mainnet, can be 200 for polygon.
+# If wanted it can be set to very big numbers, but this will increase memory usage slightly.
+maximum_rollback_depth = 10
+
 [query]
 # Time limit for handling a single query.
 #
@@ -135,16 +140,12 @@ path = "data/db"
 
 # Configuration for ingestion of data from ethereum RPC
 [ingest]
-# This should be zero always, only ingesting from the genesis is supported for now
+# The block to start ingesting from, most users would want 0 but can be at the tip for testing as well.
 from_block = 0
 # Limit to concurrent http requests
 concurrency_limit = 8
 # Batch size for Ethereum RPC requests
 batch_size = 100
-# Offset from the blockchain tip.
-# Should be configured so ingestion stays behind the possible rollback range of the indexed chain
-# A sensible value for eth mainnet is 10
-tip_offset = 10
 # Disable RPC data validation
 disable_validation = false
 

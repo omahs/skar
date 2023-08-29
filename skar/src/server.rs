@@ -292,6 +292,8 @@ async fn run_json_query(
 ) -> Result<Response, AppError> {
     let query_start = Instant::now();
 
+    let mut next_block = query.from_block;
+
     let mut rx = state
         .handler
         .clone()
@@ -299,8 +301,6 @@ async fn run_json_query(
         .context("start running query")?;
 
     let mut bytes = br#"{"data":["#.to_vec();
-
-    let mut next_block = 0;
     let mut counts = ResponseEntityCounts::default();
 
     let mut put_comma = false;

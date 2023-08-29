@@ -35,6 +35,7 @@ capnp = "0.17.2"
 skar-format = { path = "../format" }
 skar-ingest = { path = "../ingest" }
 skar-net-types = { path = "../net-types" }
+skar-rpc-client = { path = "../rpc-client" }
 
 [dev-dependencies.uuid]
 version = "1.4.1"

@@ -1,6 +1,7 @@
 use std::collections::BTreeMap;
 use std::mem;
 
+use anyhow::{anyhow, Context, Result};
 use arrow2::array::{MutableArray, MutableBinaryArray, MutableBooleanArray, UInt64Vec, UInt8Vec};
 use arrow2::datatypes::{DataType, Field, Schema, SchemaRef};
 
@@ -113,7 +114,7 @@ pub struct Batches {
     pub logs: ArrowChunk,
 }
 
-pub fn data_to_batches(mut data: BatchData) -> Batches {
+pub fn data_to_batches(mut data: BatchData) -> Result<Batches> {
     let mut b_number = UInt64Vec::new();
     let mut b_hash = hash_builder();
     let mut b_parent_hash = hash_builder();
@@ -185,7 +186,9 @@ pub fn data_to_batches(mut data: BatchData) -> Batches {
         .collect::<BTreeMap<_, _>>();
 
     for receipt in data.receipts.into_iter().flat_map(|r| r.into_iter()) {
-        let tx = tx_map.remove(receipt.transaction_hash.as_slice()).unwrap();
+        let tx = tx_map
+            .remove(receipt.transaction_hash.as_slice())
+            .context("transaction not found for receipt")?;
         assert_eq!(tx.hash, receipt.transaction_hash);
 
         tx_block_hash.push(Some(tx.block_hash.as_ref()));
@@ -231,7 +234,9 @@ pub fn data_to_batches(mut data: BatchData) -> Batches {
         }
     }
 
-    assert!(tx_map.is_empty());
+    if !tx_map.is_empty() {
+        return Err(anyhow!("some transactions don't have receipts"));
+    }
 
     for block in data.blocks.into_iter() {
         b_number.push(Some(block.header.number.into()));
@@ -329,9 +334,9 @@ pub fn data_to_batches(mut data: BatchData) -> Batches {
     ])
     .unwrap();
 
-    Batches {
+    Ok(Batches {
         logs,
         blocks,
         transactions,
-    }
+    })
 }

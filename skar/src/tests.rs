@@ -33,7 +33,7 @@ async fn test_read_write_validate() {
         to_block: 12911680,
     };
 
-    let batches = data_to_batches(data);
+    let batches = data_to_batches(data).unwrap();
 
     let in_mem = InMemory {
         blocks: InMemoryTable {
